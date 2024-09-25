@@ -5,8 +5,8 @@ const session = require("express-session");
 const rateLimit = require("express-rate-limit");
 const cors = require("cors");
 const PgSession = require("connect-pg-simple")(session);
-
 const bcrypt = require("bcrypt");
+const webauthn = require('@webauthn/server');
 require("dotenv").config();
 
 const app = express();
@@ -14,13 +14,14 @@ const PORT = process.env.PORT || 5000;
 
 const pool = new Pool({
   connectionString: process.env.POSTGRES_URL,
-})
+});
 
 const initializePassport = require("./passportConfig");
 initializePassport(passport);
 
 const initializePassportAdmin = require("./passportConfigAdmin");
 initializePassportAdmin(passport);
+
 app.use(cors({
   origin: "https://attendance-tracker-one.vercel.app",
   credentials: true,
@@ -32,7 +33,7 @@ app.use(express.json());
 app.use(
   session({
     store: new PgSession({
-      pool:pool,
+      pool: pool,
     }),
     secret: process.env.SESSION_SECRET,
     resave: false,
@@ -56,6 +57,84 @@ const limiter = rateLimit({
 app.get("/", (req, res) => {
   res.send("Backend running");
 });
+
+// Initialize WebAuthn
+const webAuthn = new webauthn.WebAuthn({
+  origin: 'https://attendance-tracker-one.vercel.app', // Your application's origin
+  rp: {
+    name: 'Attendance Tracker',
+    id: 'attendance-tracker-one.vercel.app',
+  },
+});
+
+// Endpoint to request a registration challenge
+app.post('/webauthn/register/request', async (req, res) => {
+  const { email } = req.body;
+  const user = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
+  
+  if (user.rows.length > 0) {
+    return res.status(400).send('User already exists');
+  }
+
+  const challenge = webAuthn.createChallenge(email);
+  // Store the challenge in your session or database (simplified here)
+  req.session.challenge = challenge;
+
+  res.json(challenge);
+});
+
+// Endpoint to handle registration response
+app.post('/webauthn/register/response', async (req, res) => {
+  const { credential } = req.body;
+
+  // Verify the registration credential and store it
+  const user = await pool.query("SELECT * FROM users WHERE email = $1", [credential.id]);
+  
+  if (user.rows.length === 0) {
+    return res.status(400).send('User not found');
+  }
+
+  // Store the user's public key credential
+  await pool.query(
+    "UPDATE users SET credentials = $1 WHERE email = $2",
+    [JSON.stringify(credential), credential.id]
+  );
+
+  res.json({ message: 'Registration successful' });
+});
+
+// Endpoint to request a login challenge
+app.post('/webauthn/login/request', async (req, res) => {
+  const { email } = req.body;
+  const user = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
+  
+  if (user.rows.length === 0) {
+    return res.status(400).send('User not found');
+  }
+
+  const challenge = webAuthn.createChallenge(email);
+  req.session.challenge = challenge; // Store challenge
+
+  res.json({ challenge, credential: user.rows[0].credentials }); // Send stored credentials for verification
+});
+
+// Endpoint to handle login response
+app.post('/webauthn/login/response', async (req, res) => {
+  const { credential } = req.body;
+
+  // Verify the credential
+  const isValid = webAuthn.verifyChallenge(credential);
+  
+  if (!isValid) {
+    return res.status(401).send('Authentication failed');
+  }
+
+  // Log the user in (handle session management here)
+  req.session.user = credential.id; // Simplified login session
+
+  res.json({ message: 'Login successful', user: credential });
+});
+
 
 app.post("/users/register", async (req, res) => {
   console.log(req.body);
