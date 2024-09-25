@@ -53,6 +53,7 @@ app.get("/", (req, res) => {
 });
 
 app.post("/users/register", async (req, res) => {
+  console.log(req.body);
   const { email, password , phone_number } = req.body;
 
   try {
