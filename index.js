@@ -36,7 +36,7 @@ app.use(express.json());
 app.use(
   session({
     store: new PgSession({
-      pool: pgPool, // Connection pool
+      pool: Pool,
     }),
     secret: process.env.SESSION_SECRET,
     resave: false,
