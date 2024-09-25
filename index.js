@@ -24,7 +24,7 @@ initializePassport(passport);
 const initializePassportAdmin = require("./passportConfigAdmin");
 initializePassportAdmin(passport);
 app.use(cors({
-  origin: "https://attendance-tracker-one.vercel.app/",
+  origin: "https://attendance-tracker-one.vercel.app",
   credentials: true,
 }));
 
