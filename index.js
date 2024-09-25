@@ -13,13 +13,8 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 const pool = new Pool({
-  user: process.env.DB_USER,
-  host: process.env.DB_HOST,
-  database: process.env.DB_DATABASE,
-  password: process.env.DB_PASSWORD,
-  port: process.env.DB_PORT,
-  max: 10
-});
+  connectionString: process.env.POSTGRES_URL,
+})
 
 const initializePassport = require("./passportConfig");
 initializePassport(passport);
