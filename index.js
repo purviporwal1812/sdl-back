@@ -23,8 +23,10 @@ initializePassport(passport);
 
 const initializePassportAdmin = require("./passportConfigAdmin");
 initializePassportAdmin(passport);
-
-app.use(cors());
+app.use(cors({
+  origin: "https://attendancetracker-smoky.vercel.app",
+  credentials: true,
+}));
 
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
