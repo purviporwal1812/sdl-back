@@ -4,6 +4,8 @@ const passport = require("passport");
 const session = require("express-session");
 const rateLimit = require("express-rate-limit");
 const cors = require("cors");
+const PgSession = require("connect-pg-simple")(session);
+
 const bcrypt = require("bcrypt");
 require("dotenv").config();
 
@@ -33,9 +35,16 @@ app.use(express.json());
 
 app.use(
   session({
+    store: new PgSession({
+      pool: pgPool, // Connection pool
+    }),
     secret: process.env.SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
+    cookie: {
+      secure: true, 
+      maxAge: 1000 * 60 * 60 
+    }
   })
 );
 
