@@ -6,7 +6,8 @@ const rateLimit = require("express-rate-limit");
 const cors = require("cors");
 const PgSession = require("connect-pg-simple")(session);
 const bcrypt = require("bcrypt");
-const webauthn = require('@webauthn/server');
+const { WebAuthn } = require('@webauthn/server');
+
 require("dotenv").config();
 
 const app = express();
@@ -59,13 +60,14 @@ app.get("/", (req, res) => {
 });
 
 // Initialize WebAuthn
-const webAuthn = new webauthn.WebAuthn({
-  origin: 'https://attendance-tracker-one.vercel.app', // Your application's origin
+const webAuthn = new WebAuthn({
+  origin: 'https://attendance-tracker-one.vercel.app',
   rp: {
     name: 'Attendance Tracker',
     id: 'attendance-tracker-one.vercel.app',
   },
 });
+
 
 // Endpoint to request a registration challenge
 app.post('/webauthn/register/request', async (req, res) => {
@@ -84,8 +86,14 @@ app.post('/webauthn/register/request', async (req, res) => {
 });
 
 // Endpoint to handle registration response
+// Endpoint to handle registration response
 app.post('/webauthn/register/response', async (req, res) => {
   const { credential } = req.body;
+  
+  // Check if the stored challenge matches the received credential
+  if (!req.session.challenge || credential.response.challenge !== req.session.challenge) {
+    return res.status(401).send('Invalid challenge response');
+  }
 
   // Verify the registration credential and store it
   const user = await pool.query("SELECT * FROM users WHERE email = $1", [credential.id]);
@@ -100,7 +108,35 @@ app.post('/webauthn/register/response', async (req, res) => {
     [JSON.stringify(credential), credential.id]
   );
 
+  // Clear the challenge after successful registration
+  delete req.session.challenge;
+
   res.json({ message: 'Registration successful' });
+});
+
+// Endpoint to handle login response
+app.post('/webauthn/login/response', async (req, res) => {
+  const { credential } = req.body;
+
+  // Check if the stored challenge matches the received credential
+  if (!req.session.challenge || credential.response.challenge !== req.session.challenge) {
+    return res.status(401).send('Invalid challenge response');
+  }
+
+  // Verify the credential
+  const isValid = webAuthn.verifyChallenge(credential); // Make sure this method checks the challenge properly
+  
+  if (!isValid) {
+    return res.status(401).send('Authentication failed');
+  }
+
+  // Log the user in (handle session management here)
+  req.session.user = credential.id; // Simplified login session
+
+  // Clear the challenge after successful login
+  delete req.session.challenge;
+
+  res.json({ message: 'Login successful', user: credential });
 });
 
 // Endpoint to request a login challenge
@@ -117,24 +153,6 @@ app.post('/webauthn/login/request', async (req, res) => {
 
   res.json({ challenge, credential: user.rows[0].credentials }); // Send stored credentials for verification
 });
-
-// Endpoint to handle login response
-app.post('/webauthn/login/response', async (req, res) => {
-  const { credential } = req.body;
-
-  // Verify the credential
-  const isValid = webAuthn.verifyChallenge(credential);
-  
-  if (!isValid) {
-    return res.status(401).send('Authentication failed');
-  }
-
-  // Log the user in (handle session management here)
-  req.session.user = credential.id; // Simplified login session
-
-  res.json({ message: 'Login successful', user: credential });
-});
-
 
 app.post("/users/register", async (req, res) => {
   console.log(req.body);
