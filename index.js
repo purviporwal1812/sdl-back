@@ -26,7 +26,7 @@ initializePassportAdmin(passport);
 
 app.use(
   cors({
-    origin: ["http://localhost:5173" , "https://sdl-back.vercel.app/"], 
+    origin: ["http://localhost:5173" , "https://attendancetracker-smoky.vercel.app/"], 
     credentials: true,
   })
 );
