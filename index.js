@@ -18,6 +18,7 @@ const pool = new Pool({
   database: process.env.DB_DATABASE,
   password: process.env.DB_PASSWORD,
   port: process.env.DB_PORT,
+  max: 10
 });
 
 const initializePassport = require("./passportConfig");
@@ -90,17 +91,17 @@ app.get("/users/login", (req, res) => {
 app.post("/users/login", (req, res, next) => {
   passport.authenticate("local", (err, user, info) => {
     if (err) {
-      console.error("Error during authentication:", err); // Log the error
+      console.error("Error during authentication:", err);
       return res.status(500).json({ message: "Internal Server Error" });
     }
     if (!user) {
-      console.log("Authentication failed:", info.message); // Log info for debugging
+      console.log("Authentication failed:", info.message); 
       return res.status(400).json({ message: info.message });
     }
 
     req.logIn(user, (err) => {
       if (err) {
-        console.error("Error during login:", err); // Log the error
+        console.error("Error during login:", err);
         return res.status(500).json({ message: "Internal Server Error" });
       }
       return res.json({ message: "Login successful", user });
