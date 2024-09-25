@@ -9,6 +9,9 @@ const pool = new Pool({
   database: process.env.DB_DATABASE,
   password: process.env.DB_PASSWORD,
   port: process.env.DB_PORT,
+  max: 10, // Maximum number of connections in the pool (adjust as needed)
+  idleTimeoutMillis: 30000, // Close idle clients after 30 seconds
+  connectionTimeoutMillis: 2000,
 });
 
 function initialize(passport) {
