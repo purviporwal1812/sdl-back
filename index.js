@@ -79,15 +79,25 @@ app.get("/users/login", (req, res) => {
 });
 app.post("/users/login", (req, res, next) => {
   passport.authenticate("local", (err, user, info) => {
-    if (err) return next(err);
-    if (!user) return res.status(400).json({ message: info.message });
+    if (err) {
+      console.error("Error during authentication:", err); // Log the error
+      return res.status(500).json({ message: "Internal Server Error" });
+    }
+    if (!user) {
+      console.log("Authentication failed:", info.message); // Log info for debugging
+      return res.status(400).json({ message: info.message });
+    }
 
     req.logIn(user, (err) => {
-      if (err) return next(err);
+      if (err) {
+        console.error("Error during login:", err); // Log the error
+        return res.status(500).json({ message: "Internal Server Error" });
+      }
       return res.json({ message: "Login successful", user });
     });
   })(req, res, next);
 });
+
 app.post("/admin/login", (req, res, next) => {
   passport.authenticate("admin-local", (err, admin, info) => {
     if (err) return next(err);
