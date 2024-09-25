@@ -74,7 +74,9 @@ app.post("/users/register", async (req, res) => {
     res.status(500).json({ message: "Failed to register user. Please try again." });
   }
 });
-
+app.get("/users/login", (req, res) => {
+  res.send("login running");
+});
 app.post("/users/login", (req, res, next) => {
   passport.authenticate("local", (err, user, info) => {
     if (err) return next(err);
