@@ -86,26 +86,56 @@ app.post("/users/register", async (req, res) => {
 app.get("/users/login", (req, res) => {
   res.send("login running");
 });
-app.post("/users/login", (req, res, next) => {
-  passport.authenticate("local", (err, user, info) => {
-    if (err) {
-      console.error("Error during authentication:", err);
-      return res.status(500).json({ message: "Internal Server Error" });
-    }
+app.post("/users/login", async (req, res, next) => {
+  const { email, password, face_descriptor } = req.body;
+
+  try {
+    // Check if the user exists
+    const userResult = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
+    const user = userResult.rows[0];
+
     if (!user) {
-      console.log("Authentication failed:", info.message); 
-      return res.status(400).json({ message: info.message });
+      return res.status(400).json({ message: "User not found." });
     }
 
-    req.logIn(user, (err) => {
+    // If face_descriptor is provided, compare it with the stored descriptor
+    if (face_descriptor) {
+      const storedDescriptor = JSON.parse(user.face_descriptor); // Parse the stored descriptor
+      const distance = faceapi.euclideanDistance(storedDescriptor, face_descriptor);
+
+      // If the distance is below a certain threshold, the faces match
+      if (distance < 0.6) {
+        return res.json({ message: "Face recognition login successful", user });
+      } else {
+        return res.status(400).json({ message: "Face recognition failed." });
+      }
+    }
+
+    // If no face_descriptor, fall back to password login
+    passport.authenticate("local", (err, user, info) => {
       if (err) {
-        console.error("Error during login:", err);
+        console.error("Error during authentication:", err);
         return res.status(500).json({ message: "Internal Server Error" });
       }
-      return res.json({ message: "Login successful", user });
-    });
-  })(req, res, next);
+      if (!user) {
+        console.log("Authentication failed:", info.message); 
+        return res.status(400).json({ message: info.message });
+      }
+
+      req.logIn(user, (err) => {
+        if (err) {
+          console.error("Error during login:", err);
+          return res.status(500).json({ message: "Internal Server Error" });
+        }
+        return res.json({ message: "Login successful", user });
+      });
+    })(req, res, next);
+  } catch (err) {
+    console.error("Error during login:", err);
+    res.status(500).json({ message: "Internal Server Error" });
+  }
 });
+
 
 app.post("/admin/login", (req, res, next) => {
   passport.authenticate("admin-local", (err, admin, info) => {
