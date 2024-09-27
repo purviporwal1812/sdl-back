@@ -118,67 +118,29 @@ app.post("/users/login", async (req, res, next) => {
   }
 });
 
-
-
-app.get("/users/login", (req, res) => {
-  res.send("login running");
-});
-app.post("/users/login", async (req, res, next) => {
-  const { email, password, face_descriptor } = req.body;
+app.post("/users/register", async (req, res) => {
+  console.log(req.body);
+  const { email, password, phone_number, face_descriptor } = req.body;
 
   try {
-    // Check if the user exists
-    const userResult = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
-    const user = userResult.rows[0];
-
-    if (!user) {
-      return res.status(400).json({ message: "User not found." });
+    const existingUser = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
+    if (existingUser.rows.length > 0) {
+      return res.status(400).json({ message: "User with this email already exists." });
     }
 
-    // Initialize variables to determine if authentication succeeded
-    let isFaceRecognitionSuccessful = false;
-    let isPasswordAuthenticationSuccessful = false;
+    const hashedPassword = await bcrypt.hash(password, 10);
 
-    // If face_descriptor is provided, compare it with the stored descriptor
-    if (face_descriptor) {
-      const storedDescriptor = JSON.parse(user.face_descriptor); // Parse the stored descriptor
-      const distance = faceapi.euclideanDistance(storedDescriptor, face_descriptor);
+    await pool.query(
+      "INSERT INTO users (email, password, phone_number, face_descriptor) VALUES ($1, $2, $3, $4)",
+      [email, hashedPassword, phone_number, JSON.stringify(face_descriptor)] // Store as JSON
+    );
 
-      // If the distance is below a certain threshold, the faces match
-      if (distance < 0.6) {
-        isFaceRecognitionSuccessful = true;
-      }
-    }
-
-    // If face recognition was successful or if face_descriptor is not provided, check password authentication
-    if (isFaceRecognitionSuccessful) {
-      passport.authenticate("local", (err, authenticatedUser, info) => {
-        if (err) {
-          console.error("Error during authentication:", err);
-          return res.status(500).json({ message: "Internal Server Error" });
-        }
-        if (!authenticatedUser) {
-          console.log("Authentication failed:", info.message);
-          return res.status(400).json({ message: info.message });
-        }
-
-        req.logIn(authenticatedUser, (err) => {
-          if (err) {
-            console.error("Error during login:", err);
-            return res.status(500).json({ message: "Internal Server Error" });
-          }
-          return res.json({ message: "Login successful", user: authenticatedUser });
-        });
-      })(req, res, next);
-    } else {
-      return res.status(400).json({ message: "Face recognition failed." });
-    }
+    res.status(201).json({ message: "User registered successfully." });
   } catch (err) {
-    console.error("Error during login:", err);
-    res.status(500).json({ message: "Internal Server Error" });
+    console.error("Error during registration:", err);
+    res.status(500).json({ message: "Failed to register user. Please try again." });
   }
 });
-
 
 app.post("/admin/login", (req, res, next) => {
   passport.authenticate("admin-local", (err, admin, info) => {
