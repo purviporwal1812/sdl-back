@@ -60,7 +60,7 @@ app.get("/", (req, res) => {
 
 app.post("/users/register", async (req, res) => {
   console.log(req.body);
-  const { email, password , phone_number } = req.body;
+  const { email, password, phone_number, face_descriptor } = req.body;
 
   try {
     const existingUser = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
@@ -71,8 +71,8 @@ app.post("/users/register", async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     await pool.query(
-      "INSERT INTO users (email, password,phone_number) VALUES ($1, $2,$3)",
-      [email, hashedPassword,phone_number]
+      "INSERT INTO users (email, password, phone_number, face_descriptor) VALUES ($1, $2, $3, $4)",
+      [email, hashedPassword, phone_number, JSON.stringify(face_descriptor)] // Store as JSON
     );
 
     res.status(201).json({ message: "User registered successfully." });
@@ -81,6 +81,8 @@ app.post("/users/register", async (req, res) => {
     res.status(500).json({ message: "Failed to register user. Please try again." });
   }
 });
+
+
 app.get("/users/login", (req, res) => {
   res.send("login running");
 });
