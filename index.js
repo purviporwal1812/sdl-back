@@ -98,6 +98,10 @@ app.post("/users/login", async (req, res, next) => {
       return res.status(400).json({ message: "User not found." });
     }
 
+    // Initialize variables to determine if authentication succeeded
+    let isFaceRecognitionSuccessful = false;
+    let isPasswordAuthenticationSuccessful = false;
+
     // If face_descriptor is provided, compare it with the stored descriptor
     if (face_descriptor) {
       const storedDescriptor = JSON.parse(user.face_descriptor); // Parse the stored descriptor
@@ -105,31 +109,33 @@ app.post("/users/login", async (req, res, next) => {
 
       // If the distance is below a certain threshold, the faces match
       if (distance < 0.6) {
-        return res.json({ message: "Face recognition login successful", user });
-      } else {
-        return res.status(400).json({ message: "Face recognition failed." });
+        isFaceRecognitionSuccessful = true;
       }
     }
 
-    // If no face_descriptor, fall back to password login
-    passport.authenticate("local", (err, user, info) => {
-      if (err) {
-        console.error("Error during authentication:", err);
-        return res.status(500).json({ message: "Internal Server Error" });
-      }
-      if (!user) {
-        console.log("Authentication failed:", info.message); 
-        return res.status(400).json({ message: info.message });
-      }
-
-      req.logIn(user, (err) => {
+    // If face recognition was successful or if face_descriptor is not provided, check password authentication
+    if (isFaceRecognitionSuccessful) {
+      passport.authenticate("local", (err, authenticatedUser, info) => {
         if (err) {
-          console.error("Error during login:", err);
+          console.error("Error during authentication:", err);
           return res.status(500).json({ message: "Internal Server Error" });
         }
-        return res.json({ message: "Login successful", user });
-      });
-    })(req, res, next);
+        if (!authenticatedUser) {
+          console.log("Authentication failed:", info.message);
+          return res.status(400).json({ message: info.message });
+        }
+
+        req.logIn(authenticatedUser, (err) => {
+          if (err) {
+            console.error("Error during login:", err);
+            return res.status(500).json({ message: "Internal Server Error" });
+          }
+          return res.json({ message: "Login successful", user: authenticatedUser });
+        });
+      })(req, res, next);
+    } else {
+      return res.status(400).json({ message: "Face recognition failed." });
+    }
   } catch (err) {
     console.error("Error during login:", err);
     res.status(500).json({ message: "Internal Server Error" });
