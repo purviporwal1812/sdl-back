@@ -61,9 +61,6 @@ app.get("/", (req, res) => {
 app.post("/users/login", async (req, res, next) => {
   const { email, password, face_descriptor } = req.body;
 
-  // Log incoming request data
-  console.log("Login attempt:", { email, face_descriptor });
-
   try {
     // Check if the user exists
     const userResult = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
@@ -86,11 +83,8 @@ app.post("/users/login", async (req, res, next) => {
       const storedDescriptor = JSON.parse(user.face_descriptor); // Parse the stored descriptor
       const distance = faceapi.euclideanDistance(storedDescriptor, face_descriptor);
 
-      // Log distance for debugging
-      console.log("Face recognition distance:", distance);
-
       // If the distance is below a certain threshold, the faces match
-      if (distance < 0.6) {
+      if (distance < 5.6) {
         req.logIn(user, (err) => {
           if (err) {
             console.error("Error during login:", err);
