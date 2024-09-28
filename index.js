@@ -6,6 +6,7 @@ const rateLimit = require("express-rate-limit");
 const cors = require("cors");
 const PgSession = require("connect-pg-simple")(session);
 const bcrypt = require("bcrypt");
+const faceapi = require('face-api.js'); // Adjust the import based on how you're using it
 
 require("dotenv").config();
 
@@ -61,6 +62,11 @@ app.get("/", (req, res) => {
 app.post("/users/login", async (req, res, next) => {
   const { email, password, face_descriptor } = req.body;
 
+  // Check if face_descriptor is provided
+  if (!face_descriptor) {
+    return res.status(400).json({ message: "Face descriptor is required." });
+  }
+
   try {
     // Check if the user exists
     const userResult = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
@@ -70,12 +76,19 @@ app.post("/users/login", async (req, res, next) => {
       return res.status(400).json({ message: "User not found." });
     }
 
-    // If the face descriptor is present, compare it with the stored descriptor
-    const storedDescriptor = user.face_descriptor; // Assuming it's already a JSON object/array
-    const distance = faceapi.euclideanDistance(storedDescriptor, face_descriptor);
-    console.log("Face recognition distance:", distance); // Log the distance for debugging
+    const storedDescriptor = user.face_descriptor; // Assuming it's already stored as JSON
 
-    // Check if the distance is below the threshold
+    // Check if storedDescriptor exists and compare it
+    if (!storedDescriptor) {
+      return res.status(400).json({ message: "No face descriptor found for user." });
+    }
+
+    // Calculate the Euclidean distance between stored and provided descriptors
+    const distance = faceapi.euclideanDistance(storedDescriptor, face_descriptor);
+
+    // Log the distance for debugging
+    console.log("Face recognition distance:", distance);
+
     if (distance < 0.6) {
       // If faces match, log in the user
       req.logIn(user, (err) => {
@@ -86,15 +99,14 @@ app.post("/users/login", async (req, res, next) => {
         return res.json({ message: "Login successful", user });
       });
     } else {
-      // If faces do not match, return an error
       return res.status(400).json({ message: "Face recognition failed." });
     }
   } catch (err) {
-    // Catch any errors during the process
     console.error("Error during login:", err);
     res.status(500).json({ message: "Internal Server Error" });
   }
 });
+
 
 
 app.post("/users/register", async (req, res) => {
