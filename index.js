@@ -6,7 +6,7 @@ const rateLimit = require("express-rate-limit");
 const cors = require("cors");
 const PgSession = require("connect-pg-simple")(session);
 const bcrypt = require("bcrypt");
-const faceapi = require('face-api.js');
+const faceapi = require('face-api.js'); // Adjust the import based on how you're using it
 
 require("dotenv").config();
 
@@ -59,16 +59,6 @@ app.get("/", (req, res) => {
   res.send("Backend running");
 });
 
-const path = require("path");
-
-app.use(express.static(path.join("C:/Users/Purvi/Desktop/sdl-front/dist")));
-
-// Handle wildcard route for React app
-app.get("*", (req, res) => {
-  res.sendFile(path.join("C:/Users/Purvi/Desktop/sdl-front/dist/index.html"));
-});
-
-
 app.post("/users/login", async (req, res, next) => {
   const { email, password, face_descriptor } = req.body;
 
@@ -107,14 +97,14 @@ app.post("/users/login", async (req, res, next) => {
           return res.status(500).json({ message: "Internal Server Error" });
         }
         return res.json({
-          message: "Login successful",
-          user: {
-            id: user.id,
-            email: user.email,
-            theme: user.theme   // <-- include theme
-        }
-      });
-      });
+                message: "Login successful",
+                   user: {
+                     id: user.id,
+                   email: user.email,
+                    /* …any other info… */
+                    theme: user.theme   // <-- include theme
+                 }
+               });      });
     } else {
       return res.status(400).json({ message: "Face recognition failed." });
     }
@@ -245,6 +235,7 @@ app.post("/admin/dashboard" , async (req, res) => {
       res.status(500).send("Failed to add room. Please try again.");
     }
   });
+// after your other app.post()/app.get() handlers, but before app.listen()
 
 // 1) Get current user’s theme
 app.get("/users/theme", (req, res) => {
