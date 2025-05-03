@@ -238,9 +238,14 @@ app.post("/admin/dashboard", async (req, res) => {
 });
 
 // --- STATIC FILE SERVE + CATCH-ALL (must come last) ---
-app.use(express.static(path.join(__dirname, "../sdl-front/dist")));
-app.get("*", (req, res) => {
-  res.sendFile(path.join(__dirname, "../sdl-front/dist/index.html"));
+const clientDist = path.join(__dirname, "../sdl-front/dist");
+
+// serve all of the real static assets
+app.use(express.static(clientDist));
+
+// for any other GET request (i.e. your client‑side routes), send back index.html
+app.get("/*", (req, res) => {
+  res.sendFile(path.join(clientDist, "index.html"));
 });
 
 app.listen(PORT, () => {
