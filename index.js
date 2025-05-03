@@ -6,7 +6,7 @@ const rateLimit = require("express-rate-limit");
 const cors = require("cors");
 const PgSession = require("connect-pg-simple")(session);
 const bcrypt = require("bcrypt");
-const faceapi = require('face-api.js'); // Adjust the import based on how you're using it
+const faceapi = require('face-api.js');
 
 require("dotenv").config();
 
@@ -59,6 +59,16 @@ app.get("/", (req, res) => {
   res.send("Backend running");
 });
 
+const path = require("path");
+
+app.use(express.static(path.join("C:/Users/Purvi/Desktop/sdl-front/dist")));
+
+// Handle wildcard route for React app
+app.get("*", (req, res) => {
+  res.sendFile(path.join("C:/Users/Purvi/Desktop/sdl-front/dist/index.html"));
+});
+
+
 app.post("/users/login", async (req, res, next) => {
   const { email, password, face_descriptor } = req.body;
 
@@ -96,7 +106,14 @@ app.post("/users/login", async (req, res, next) => {
           console.error("Error during login:", err);
           return res.status(500).json({ message: "Internal Server Error" });
         }
-        return res.json({ message: "Login successful", user });
+        return res.json({
+          message: "Login successful",
+          user: {
+            id: user.id,
+            email: user.email,
+            theme: user.theme   // <-- include theme
+        }
+      });
       });
     } else {
       return res.status(400).json({ message: "Face recognition failed." });
@@ -228,6 +245,33 @@ app.post("/admin/dashboard" , async (req, res) => {
       res.status(500).send("Failed to add room. Please try again.");
     }
   });
+
+// 1) Get current user’s theme
+app.get("/users/theme", (req, res) => {
+  if (!req.user) return res.status(401).json({ message: "Not authenticated" });
+  res.json({ theme: req.user.theme });
+});
+
+// 2) Update user’s theme
+app.post("/users/theme", async (req, res) => {
+  if (!req.user) return res.status(401).json({ message: "Not authenticated" });
+  const { theme } = req.body;
+  if (!["light","dark"].includes(theme)) {
+    return res.status(400).json({ message: "Invalid theme" });
+  }
+  try {
+    await pool.query(
+      "UPDATE users SET theme = $1 WHERE id = $2",
+      [theme, req.user.id]
+    );
+    // also update req.user so subsequent reqs see the new theme
+    req.user.theme = theme;
+    res.json({ theme });
+  } catch (err) {
+    console.error("Error updating theme", err);
+    res.status(500).json({ message: "Could not save theme" });
+  }
+});
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
