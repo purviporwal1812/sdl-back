@@ -1,3 +1,4 @@
+// index.js
 const express = require("express");
 const { Pool } = require("pg");
 const passport = require("passport");
@@ -6,7 +7,8 @@ const rateLimit = require("express-rate-limit");
 const cors = require("cors");
 const PgSession = require("connect-pg-simple")(session);
 const bcrypt = require("bcrypt");
-const faceapi = require('face-api.js'); // Adjust the import based on how you're using it
+const faceapi = require("face-api.js"); // Adjust import if needed
+const path = require("path");
 
 require("dotenv").config();
 
@@ -17,94 +19,81 @@ const pool = new Pool({
   connectionString: process.env.POSTGRES_URL,
 });
 
+// Passport setup
 const initializePassport = require("./passportConfig");
 initializePassport(passport);
-
 const initializePassportAdmin = require("./passportConfigAdmin");
 initializePassportAdmin(passport);
 
+// CORS + body parsing + sessions
 app.use(cors({
   origin: "https://attendance-tracker-one.vercel.app",
   credentials: true,
 }));
-
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
-
-app.use(
-  session({
-    store: new PgSession({
-      pool: pool,
-    }),
-    secret: process.env.SESSION_SECRET,
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-      secure: true, 
-      maxAge: 1000 * 60 * 60 
-    }
-  })
-);
-
+app.use(session({
+  store: new PgSession({ pool }),
+  secret: process.env.SESSION_SECRET,
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    secure: true,
+    maxAge: 1000 * 60 * 60, // 1 hour
+  }
+}));
 app.use(passport.initialize());
 app.use(passport.session());
 
+// Rate limiter for attendance
 const limiter = rateLimit({
-  windowMs: 60 * 60 * 1000, 
+  windowMs: 60 * 60 * 1000,
   max: 1,
   message: "You have already marked your attendance for this hour.",
 });
 
+// --- API ROUTES ---
+
+// Health check
 app.get("/", (req, res) => {
   res.send("Backend running");
 });
 
+// USER LOGIN (face + password)
 app.post("/users/login", async (req, res, next) => {
   const { email, password, face_descriptor } = req.body;
-
-  // Check if face_descriptor is provided
   if (!face_descriptor) {
     return res.status(400).json({ message: "Face descriptor is required." });
   }
-
   try {
-    // Check if the user exists
     const userResult = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
     const user = userResult.rows[0];
+    if (!user) return res.status(400).json({ message: "User not found." });
 
-    if (!user) {
-      return res.status(400).json({ message: "User not found." });
-    }
-
-    const storedDescriptor = user.face_descriptor; // Assuming it's already stored as JSON
-
-    // Check if storedDescriptor exists and compare it
+    const storedDescriptor = user.face_descriptor;
     if (!storedDescriptor) {
       return res.status(400).json({ message: "No face descriptor found for user." });
     }
 
-    // Calculate the Euclidean distance between stored and provided descriptors
     const distance = faceapi.euclideanDistance(storedDescriptor, face_descriptor);
-
-    // Log the distance for debugging
     console.log("Face recognition distance:", distance);
 
     if (distance < 0.6) {
-      // If faces match, log in the user
       req.logIn(user, (err) => {
         if (err) {
           console.error("Error during login:", err);
           return res.status(500).json({ message: "Internal Server Error" });
         }
+        // include theme in payload
         return res.json({
-                message: "Login successful",
-                   user: {
-                     id: user.id,
-                   email: user.email,
-                    /* …any other info… */
-                    theme: user.theme   // <-- include theme
-                 }
-               });      });
+          message: "Login successful",
+          user: {
+            id: user.id,
+            email: user.email,
+            theme: user.theme
+          }
+        });
+      });
     } else {
       return res.status(400).json({ message: "Face recognition failed." });
     }
@@ -114,25 +103,19 @@ app.post("/users/login", async (req, res, next) => {
   }
 });
 
-
-
+// USER REGISTER
 app.post("/users/register", async (req, res) => {
-  console.log(req.body);
   const { email, password, phone_number, face_descriptor } = req.body;
-
   try {
-    const existingUser = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
-    if (existingUser.rows.length > 0) {
+    const existing = await pool.query("SELECT 1 FROM users WHERE email = $1", [email]);
+    if (existing.rows.length) {
       return res.status(400).json({ message: "User with this email already exists." });
     }
-
-    const hashedPassword = await bcrypt.hash(password, 10);
-
+    const hashed = await bcrypt.hash(password, 10);
     await pool.query(
       "INSERT INTO users (email, password, phone_number, face_descriptor) VALUES ($1, $2, $3, $4)",
-      [email, hashedPassword, phone_number, JSON.stringify(face_descriptor)] // Store as JSON
+      [email, hashed, phone_number, JSON.stringify(face_descriptor)]
     );
-
     res.status(201).json({ message: "User registered successfully." });
   } catch (err) {
     console.error("Error during registration:", err);
@@ -140,31 +123,52 @@ app.post("/users/register", async (req, res) => {
   }
 });
 
+// THEME ENDPOINTS
+app.get("/users/theme", (req, res) => {
+  if (!req.user) return res.status(401).json({ message: "Not authenticated" });
+  res.json({ theme: req.user.theme });
+});
+
+app.post("/users/theme", async (req, res) => {
+  if (!req.user) return res.status(401).json({ message: "Not authenticated" });
+  const { theme } = req.body;
+  if (!["light", "dark"].includes(theme)) {
+    return res.status(400).json({ message: "Invalid theme" });
+  }
+  try {
+    await pool.query("UPDATE users SET theme = $1 WHERE id = $2", [theme, req.user.id]);
+    req.user.theme = theme;
+    res.json({ theme });
+  } catch (err) {
+    console.error("Error updating theme", err);
+    res.status(500).json({ message: "Could not save theme" });
+  }
+});
+
+// ADMIN LOGIN
 app.post("/admin/login", (req, res, next) => {
   passport.authenticate("admin-local", (err, admin, info) => {
     if (err) return next(err);
     if (!admin) return res.status(400).json({ message: info.message });
-
     req.logIn(admin, (err) => {
       if (err) return next(err);
-      return res.json({ message: "Login successful", admin });
+      res.json({ message: "Login successful", admin });
     });
   })(req, res, next);
 });
 
+// ADMIN: list & select rooms
 app.get("/admin/rooms", async (req, res) => {
   try {
-    const roomsResult = await pool.query("SELECT * FROM room");
-    res.json(roomsResult.rows);
+    const rooms = await pool.query("SELECT * FROM room");
+    res.json(rooms.rows);
   } catch (err) {
     console.error("Error fetching rooms", err);
     res.status(500).send("Failed to fetch rooms.");
   }
 });
-
 app.post("/admin/select-room", async (req, res) => {
   const { roomId } = req.body;
-
   try {
     await pool.query("UPDATE room SET selected = FALSE WHERE selected = TRUE");
     await pool.query("UPDATE room SET selected = TRUE WHERE id = $1", [roomId]);
@@ -175,93 +179,68 @@ app.post("/admin/select-room", async (req, res) => {
   }
 });
 
+// MARK ATTENDANCE
 app.post("/mark-attendance", limiter, async (req, res) => {
   const { name, rollNumber, lat, lon } = req.body;
   const latitude = parseFloat(lat);
   const longitude = parseFloat(lon);
-
   try {
-    const selectedRoomResult = await pool.query("SELECT * FROM room WHERE selected = TRUE");
-    if (selectedRoomResult.rows.length === 0) {
-      return res.status(400).send("No room has been selected by the admin.");
+    const sel = await pool.query("SELECT * FROM room WHERE selected = TRUE");
+    if (sel.rows.length === 0) {
+      return res.status(400).send("No room selected by the admin.");
     }
-
-    const selectedRoom = selectedRoomResult.rows[0];
+    const room = sel.rows[0];
     if (
-      latitude >= selectedRoom.minlat &&
-      latitude <= selectedRoom.maxlat &&
-      longitude >= selectedRoom.minlon &&
-      longitude <= selectedRoom.maxlon
+      latitude >= room.minlat &&
+      latitude <= room.maxlat &&
+      longitude >= room.minlon &&
+      longitude <= room.maxlon
     ) {
       await pool.query(
-        `INSERT INTO attendance (name, rollNumber, latitude, longitude) VALUES ($1, $2, $3, $4)`,
+        "INSERT INTO attendance (name, rollNumber, latitude, longitude) VALUES ($1,$2,$3,$4)",
         [name, rollNumber, latitude, longitude]
       );
-      res.send(`Attendance marked successfully for : ${name}`);
+      res.send(`Attendance marked successfully for: ${name}`);
     } else {
-      res.status(400).send("Failed to mark attendance. You are not in the selected room.");
+      res.status(400).send("You are not in the selected room.");
     }
   } catch (err) {
-    console.error("Error marking attendance", err.stack);
+    console.error("Error marking attendance", err);
     res.status(500).send("Failed to mark attendance. Please try again.");
   }
 });
 
-app.get("/admin/dashboard" , async (req, res) => {
-    try {
-      const roomsResult = await pool.query("SELECT * FROM room");
-      res.json(roomsResult.rows);
-    } catch (err) {
-      console.error("Error fetching rooms", err.stack);
-      res.status(500).send("Failed to fetch rooms.");
-    }
-  })
-
-app.post("/admin/dashboard" , async (req, res) => {
-    const { name, minlat, maxlat, minlon, maxlon } = req.body;
-
-    if (!name || !minlat || !maxlat || !minlon || !maxlon) {
-      return res.status(400).send("All fields are required");
-    }
-
-    try {
-      const newRoom = await pool.query(
-        "INSERT INTO room (name, minlat, maxlat, minlon, maxlon, selected) VALUES ($1, $2, $3, $4, $5, FALSE) RETURNING *",
-        [name, parseFloat(minlat), parseFloat(maxlat), parseFloat(minlon), parseFloat(maxlon)]
-      );
-      res.json(newRoom.rows[0]); 
-    } catch (err) {
-      console.error("Error adding room", err.stack);
-      res.status(500).send("Failed to add room. Please try again.");
-    }
-  });
-// after your other app.post()/app.get() handlers, but before app.listen()
-
-// 1) Get current user’s theme
-app.get("/users/theme", (req, res) => {
-  if (!req.user) return res.status(401).json({ message: "Not authenticated" });
-  res.json({ theme: req.user.theme });
+// ADMIN DASHBOARD (rooms CRUD)
+app.get("/admin/dashboard", async (req, res) => {
+  try {
+    const rooms = await pool.query("SELECT * FROM room");
+    res.json(rooms.rows);
+  } catch (err) {
+    console.error("Error fetching rooms", err);
+    res.status(500).send("Failed to fetch rooms.");
+  }
 });
-
-// 2) Update user’s theme
-app.post("/users/theme", async (req, res) => {
-  if (!req.user) return res.status(401).json({ message: "Not authenticated" });
-  const { theme } = req.body;
-  if (!["light","dark"].includes(theme)) {
-    return res.status(400).json({ message: "Invalid theme" });
+app.post("/admin/dashboard", async (req, res) => {
+  const { name, minlat, maxlat, minlon, maxlon } = req.body;
+  if (!name || !minlat || !maxlat || !minlon || !maxlon) {
+    return res.status(400).send("All fields are required");
   }
   try {
-    await pool.query(
-      "UPDATE users SET theme = $1 WHERE id = $2",
-      [theme, req.user.id]
+    const result = await pool.query(
+      "INSERT INTO room (name,minlat,maxlat,minlon,maxlon,selected) VALUES ($1,$2,$3,$4,$5,FALSE) RETURNING *",
+      [name, parseFloat(minlat), parseFloat(maxlat), parseFloat(minlon), parseFloat(maxlon)]
     );
-    // also update req.user so subsequent reqs see the new theme
-    req.user.theme = theme;
-    res.json({ theme });
+    res.json(result.rows[0]);
   } catch (err) {
-    console.error("Error updating theme", err);
-    res.status(500).json({ message: "Could not save theme" });
+    console.error("Error adding room", err);
+    res.status(500).send("Failed to add room. Please try again.");
   }
+});
+
+// --- STATIC FILE SERVE + CATCH-ALL (must come last) ---
+app.use(express.static(path.join(__dirname, "../sdl-front/dist")));
+app.get("*", (req, res) => {
+  res.sendFile(path.join(__dirname, "../sdl-front/dist/index.html"));
 });
 
 app.listen(PORT, () => {
