@@ -1,87 +1,101 @@
-// index.js
-const express = require("express");
-const { Pool } = require("pg");
-const passport = require("passport");
-const session = require("express-session");
-const rateLimit = require("express-rate-limit");
-const cors = require("cors");
-const PgSession = require("connect-pg-simple")(session);
-const bcrypt = require("bcrypt");
-const faceapi = require("face-api.js"); // Adjust import if needed
-const path = require("path");
-
-require("dotenv").config();
+require('dotenv').config();
+const express = require('express');
+const { Pool } = require('pg');
+const passport = require('passport');
+const session = require('express-session');
+const rateLimit = require('express-rate-limit');
+const cors = require('cors');
+const PgSession = require('connect-pg-simple')(session);
+const bcrypt = require('bcrypt');
+const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-const pool = new Pool({
-  connectionString: process.env.POSTGRES_URL,
-});
-// Passport setup
-const initializePassport = require("./passportConfig");
-initializePassport(passport);
-const initializePassportAdmin = require("./passportConfigAdmin");
-initializePassportAdmin(passport);
+const pool = new Pool({ connectionString: process.env.POSTGRES_URL });
 
-// CORS + body parsing + sessions
+// ——— Passport setup ———
+require('./passportConfig')(passport);
+require('./passportConfigAdmin')(passport);
+require('./passportOauthConfig')(passport);
+
+// ——— Middlewares ———
 app.use(cors({
-  origin: "https://attendance-tracker-one.vercel.app",
+  origin: 'https://attendance-tracker-one.vercel.app',
   credentials: true,
 }));
-app.use(express.urlencoded({ extended: false }));
+
 app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
+
+// because we’re behind Vercel’s proxy
+app.set('trust proxy', 1);
+
 app.use(session({
   store: new PgSession({ pool }),
   secret: process.env.SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
   cookie: {
-    secure: true,
-    maxAge: 1000 * 60 * 60, // 1 hour
+    secure: true,           // only over HTTPS
+    maxAge: 1000 * 60 * 60, // 1h
   }
 }));
+
 app.use(passport.initialize());
 app.use(passport.session());
 
-// Rate limiter for attendance
-const limiter = rateLimit({
-  windowMs: 60 * 60 * 1000,
-  max: 1,
-  message: "You have already marked your attendance for this hour.",
+// ——— Utility: Euclidean distance ———
+function euclideanDistance(a, b) {
+  let sum = 0;
+  for (let i = 0; i < a.length; i++) {
+    const d = a[i] - b[i];
+    sum += d * d;
+  }
+  return Math.sqrt(sum);
+}
+
+// ——— Face‑verify endpoint ———
+app.post('/users/face-verify', async (req, res) => {
+  if (!req.user) return res.status(401).send('Not authenticated');
+  const { face_descriptor } = req.body;
+  if (!Array.isArray(face_descriptor)) return res.status(400).send('No face data');
+
+  try {
+    const { rows } = await pool.query(
+      'SELECT face_descriptor FROM users WHERE id=$1',
+      [req.user.id]
+    );
+    if (!rows.length || !rows[0].face_descriptor) {
+      return res.status(400).send('No face on record');
+    }
+
+    const stored = rows[0].face_descriptor;
+    const distance = euclideanDistance(stored, face_descriptor);
+    console.log('Face distance:', distance);
+
+    return distance < 0.6
+      ? res.sendStatus(200)
+      : res.status(403).send('Face mismatch');
+  } catch (err) {
+    console.error('[Face-verification]', err);
+    return res.sendStatus(500);
+  }
 });
-console.log(
-  '→ Google OAuth:',
-  'ID=', process.env.GOOGLE_CLIENT_ID,
-  'SECRET=', process.env.GOOGLE_CLIENT_SECRET ? '••••' : undefined,
-  'CALLBACK=', process.env.OAUTH_CALLBACK_URL
-);
 
-const initializeOAuth = require('./passportOauthConfig');
-initializeOAuth(passport);
-
-// --- OAuth Routes ---
-
-// 1) Trigger Google OAuth flow
+// ——— Google OAuth routes ———
+// 1) kick-off
 app.get('/auth/google',
-  passport.authenticate('google', { scope: ['profile','email'] })
+  passport.authenticate('google', { scope: ['profile', 'email'] })
 );
-
-// 2) Google OAuth callback endpoint
+// 2) callback
 app.get('/auth/google/callback',
-  passport.authenticate('google', {
-    failureRedirect: '/login?error=oauth',
-    session: true
-  }),
+  passport.authenticate('google', { failureRedirect: '/login?error=oauth' }),
   (req, res) => {
-    // Successful auth → redirect or JSON response
-    res.redirect('/dashboard');
+    // now authenticated by Google, next step: face‑verify
+    res.redirect('https://attendance-tracker-one.vercel.app/face-verify');
   }
 );
-
-
-
-
 // --- API ROUTES ---
 
 // Health check
