@@ -101,19 +101,37 @@ const initializeOAuth = require('./passportOauthConfig');
 initializeOAuth(passport);
 
 // ——— Google OAuth routes ———
-// 1) kick-off
+// 1) kick‑off
 app.get('/auth/google',
+  (req, res, next) => {
+    console.log('[OAuth] Starting Google flow');
+    next();
+  },
   passport.authenticate('google', { scope: ['profile', 'email'] })
 );
-// 2) callback
-app.get('/auth/google/callback',
-  passport.authenticate('google', { failureRedirect: '/login?error=oauth' }),
-  (req, res) => {
-    // now authenticated by Google, next step: face‑verify
-    res.redirect('https://attendance-tracker-one.vercel.app/face-verify');
-  }
-);
 
+// 2) callback
+app.get('/auth/google/callback', (req, res, next) => {
+  console.log('[OAuth] Callback invoked');
+  passport.authenticate('google', (err, user, info) => {
+    if (err) {
+      console.error('[OAuth] authenticate error:', err, info);
+      return res.redirect('/login?error=oauth');
+    }
+    if (!user) {
+      console.error('[OAuth] No user returned:', info);
+      return res.redirect('/login?error=oauth');
+    }
+    req.logIn(user, loginErr => {
+      if (loginErr) {
+        console.error('[OAuth] logIn error:', loginErr);
+        return res.redirect('/login?error=oauth');
+      }
+      console.log('[OAuth] Authentication successful, redirecting to face-verification');
+      return res.redirect('https://attendance-tracker-one.vercel.app/face-verify');
+    });
+  })(req, res, next);
+});
 
 
 
@@ -302,16 +320,6 @@ app.post("/admin/dashboard", async (req, res) => {
   }
 });
 
-// --- STATIC FILE SERVE + CATCH-ALL (must come last) ---
-const clientDist = path.join(__dirname, "../sdl-front/dist");
-
-// serve all of the real static assets
-app.use(express.static(clientDist));
-
-// for any other GET request (i.e. your client‑side routes), send back index.html
-app.get("/*", (req, res) => {
-  res.sendFile(path.join(clientDist, "index.html"));
-});
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
