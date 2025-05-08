@@ -44,7 +44,18 @@ app.use(session({
 
 app.use(passport.initialize());
 app.use(passport.session());
-
+// Rate limiter for attendance
+const limiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 1,
+  message: "You have already marked your attendance for this hour.",
+});
+console.log(
+  '→ Google OAuth:',
+  'ID=', process.env.GOOGLE_CLIENT_ID,
+  'SECRET=', process.env.GOOGLE_CLIENT_SECRET ? '••••' : undefined,
+  'CALLBACK=', process.env.OAUTH_CALLBACK_URL
+);
 // ——— Utility: Euclidean distance ———
 function euclideanDistance(a, b) {
   let sum = 0;
