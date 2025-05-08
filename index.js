@@ -53,7 +53,27 @@ const limiter = rateLimit({
 });
 
 // --- API ROUTES ---
+const initializeOAuth = require('./passportOauthConfig');
+initializeOAuth(passport);
 
+// --- OAuth Routes ---
+
+// 1) Trigger Google OAuth flow
+app.get('/auth/google',
+  passport.authenticate('google', { scope: ['profile','email'] })
+);
+
+// 2) Google OAuth callback endpoint
+app.get('/auth/google/callback',
+  passport.authenticate('google', {
+    failureRedirect: '/login?error=oauth',
+    session: true
+  }),
+  (req, res) => {
+    // Successful auth → redirect or JSON response
+    res.redirect('/dashboard');
+  }
+);
 // Health check
 app.get("/", (req, res) => {
   res.send("Backend running");
@@ -236,6 +256,11 @@ app.post("/admin/dashboard", async (req, res) => {
     res.status(500).send("Failed to add room. Please try again.");
   }
 });
+
+// index.js (additions)
+
+// After existing passport setup...
+
 
 // --- STATIC FILE SERVE + CATCH-ALL (must come last) ---
 const clientDist = path.join(__dirname, "../sdl-front/dist");

@@ -21,11 +21,12 @@
     "express": "^4.19.2",
     "express-flash": "^0.0.2",
     "express-rate-limit": "^7.4.0",
-    "express-session": "^1.18.0",
+    "express-session": "^1.18.1",
     "face-api.js": "^0.22.2",
     "passport": "^0.7.0",
+    "passport-google-oauth20": "^2.0.0",
     "passport-local": "^1.0.0",
-    "pg": "^8.12.0"
+    "pg": "^8.15.6"
   },
   "devDependencies": {
     "nodemon": "^3.1.4"
