@@ -18,7 +18,6 @@ const PORT = process.env.PORT || 5000;
 const pool = new Pool({
   connectionString: process.env.POSTGRES_URL,
 });
-
 // Passport setup
 const initializePassport = require("./passportConfig");
 initializePassport(passport);
@@ -51,7 +50,6 @@ const limiter = rateLimit({
   max: 1,
   message: "You have already marked your attendance for this hour.",
 });
-
 console.log(
   '→ Google OAuth:',
   'ID=', process.env.GOOGLE_CLIENT_ID,
@@ -80,6 +78,12 @@ app.get('/auth/google/callback',
     res.redirect('/dashboard');
   }
 );
+
+
+
+
+// --- API ROUTES ---
+
 // Health check
 app.get("/", (req, res) => {
   res.send("Backend running");
@@ -262,11 +266,6 @@ app.post("/admin/dashboard", async (req, res) => {
     res.status(500).send("Failed to add room. Please try again.");
   }
 });
-
-// index.js (additions)
-
-// After existing passport setup...
-
 
 // --- STATIC FILE SERVE + CATCH-ALL (must come last) ---
 const clientDist = path.join(__dirname, "../sdl-front/dist");
