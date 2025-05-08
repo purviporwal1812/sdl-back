@@ -52,7 +52,13 @@ const limiter = rateLimit({
   message: "You have already marked your attendance for this hour.",
 });
 
-// --- API ROUTES ---
+console.log(
+  '→ Google OAuth:',
+  'ID=', process.env.GOOGLE_CLIENT_ID,
+  'SECRET=', process.env.GOOGLE_CLIENT_SECRET ? '••••' : undefined,
+  'CALLBACK=', process.env.OAUTH_CALLBACK_URL
+);
+
 const initializeOAuth = require('./passportOauthConfig');
 initializeOAuth(passport);
 
