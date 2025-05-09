@@ -1,4 +1,6 @@
 // index.js
+require("dotenv").config();
+
 const express = require("express");
 const { Pool } = require("pg");
 const passport = require("passport");
@@ -9,8 +11,17 @@ const PgSession = require("connect-pg-simple")(session);
 const bcrypt = require("bcrypt");
 const faceapi = require("face-api.js"); // Adjust import if needed
 const path = require("path");
+const crypto = require('crypto');
+const transporter = require('./mailer');
+transporter.verify((err, success) => {
+  if (err) {
+    console.error("SMTP connection failed:", err);
+  } else {
+    console.log("SMTP ready to send messages");
+  }
+});
 
-require("dotenv").config();
+
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -18,6 +29,7 @@ const PORT = process.env.PORT || 5000;
 const pool = new Pool({
   connectionString: process.env.POSTGRES_URL,
 });
+
 // Passport setup
 const initializePassport = require("./passportConfig");
 initializePassport(passport);
@@ -26,7 +38,7 @@ initializePassportAdmin(passport);
 
 // CORS + body parsing + sessions
 app.use(cors({
-  origin: "https://attendance-tracker-one.vercel.app",
+  origin: [process.env.CLIENT_URL, process.env.FRONTEND_URL],
   credentials: true,
 }));
 app.use(express.urlencoded({ extended: false }));
@@ -39,89 +51,35 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   cookie: {
-    secure: true,        // you’re on HTTPS
-    sameSite: 'none',    // allow cross-site cookies
-    maxAge: 1000 * 60 * 60
+    secure: true,
+    maxAge: 1000 * 60 * 60, // 1 hour
   }
 }));
-
-
-
 app.use(passport.initialize());
 app.use(passport.session());
 
+// — Google OAuth entrypoint —
+
+const initializeOAuth = require('./passportOauthConfig');
+initializeOAuth(passport);
+app.get('/auth/google',
+  passport.authenticate('google', { scope:['profile','email'] })
+);
+
+// — Google OAuth callback —
+app.get('/auth/google/callback',
+  passport.authenticate('google', {
+    session: true,
+    successRedirect: `${process.env.FRONTEND_URL}/#/mark-attendance`,
+    failureRedirect: `${process.env.FRONTEND_URL}/#/users/register?error=oauth`
+  })
+);
 // Rate limiter for attendance
 const limiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 1,
   message: "You have already marked your attendance for this hour.",
 });
-console.log(
-  '→ Google OAuth:',
-  'ID=', process.env.GOOGLE_CLIENT_ID,
-  'SECRET=', process.env.GOOGLE_CLIENT_SECRET ? '••••' : undefined,
-  'CALLBACK=', process.env.OAUTH_CALLBACK_URL
-);
-// ——— Utility: Euclidean distance ———
-function euclideanDistance(a, b) {
-  let sum = 0;
-  for (let i = 0; i < a.length; i++) {
-    const d = a[i] - b[i];
-    sum += d * d;
-  }
-  return Math.sqrt(sum);
-}
-// ——— Face‑verify endpoint ———
-app.post('/users/face-verify', async (req, res) => {
-  if (!req.user) return res.status(401).send('Not authenticated');
-  const { face_descriptor } = req.body;
-  if (!Array.isArray(face_descriptor)) return res.status(400).send('No face data');
-
-  try {
-    const { rows } = await pool.query(
-      'SELECT face_descriptor FROM users WHERE id=$1',
-      [req.user.id]
-    );
-    if (!rows.length || !rows[0].face_descriptor) {
-      return res.status(400).send('No face on record');
-    }
-
-    const stored = rows[0].face_descriptor;
-    const distance = euclideanDistance(stored, face_descriptor);
-    console.log('Face distance:', distance);
-
-    return distance < 0.6
-      ? res.sendStatus(200)
-      : res.status(403).send('Face mismatch');
-  } catch (err) {
-    console.error('[Face-verification]', err);
-    return res.sendStatus(500);
-  }
-});
-
-const initializeOAuth = require('./passportOauthConfig');
-initializeOAuth(passport);
-
-// ——— Google OAuth routes ———
-// 1) kick‑off
-app.get('/auth/google',
-  (req, res, next) => {
-    console.log('[OAuth] Starting Google flow');
-    next();
-  },
-  passport.authenticate('google', { scope: ['profile', 'email'] })
-);
-
-// 2) callback
-app.get(
-  '/auth/google/callback',
-  passport.authenticate('google', {
-    successRedirect: `https://attendance-tracker-one.vercel.app//#/mark-attendance`,
-    failureRedirect: `https://attendance-tracker-one.vercel.app//#/users/login?error=oauth`
-  })
-);
-
-
 
 // --- API ROUTES ---
 
@@ -133,6 +91,7 @@ app.get("/", (req, res) => {
 // USER LOGIN (face + password)
 app.post("/users/login", async (req, res, next) => {
   const { email, password, face_descriptor } = req.body;
+
   if (!face_descriptor) {
     return res.status(400).json({ message: "Face descriptor is required." });
   }
@@ -140,7 +99,9 @@ app.post("/users/login", async (req, res, next) => {
     const userResult = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
     const user = userResult.rows[0];
     if (!user) return res.status(400).json({ message: "User not found." });
-
+    if (!user.is_verified) {
+      return res.status(403).json({ message: "Please verify your email before logging in." });
+    }
     const storedDescriptor = user.face_descriptor;
     if (!storedDescriptor) {
       return res.status(400).json({ message: "No face descriptor found for user." });
@@ -178,19 +139,64 @@ app.post("/users/login", async (req, res, next) => {
 app.post("/users/register", async (req, res) => {
   const { email, password, phone_number, face_descriptor } = req.body;
   try {
-    const existing = await pool.query("SELECT 1 FROM users WHERE email = $1", [email]);
-    if (existing.rows.length) {
-      return res.status(400).json({ message: "User with this email already exists." });
+    // 1. Check existing
+    const exists = await pool.query("SELECT 1 FROM users WHERE email=$1", [email]);
+    if (exists.rows.length) {
+      return res.status(400).json({ message: "Email already in use." });
     }
+    // 2. Hash password
     const hashed = await bcrypt.hash(password, 10);
+    // 3. Generate a verification token
+    const token = crypto.randomBytes(32).toString("hex");
+    // 4. Insert user with token
     await pool.query(
-      "INSERT INTO users (email, password, phone_number, face_descriptor) VALUES ($1, $2, $3, $4)",
-      [email, hashed, phone_number, JSON.stringify(face_descriptor)]
+      `INSERT INTO users 
+         (email, password, phone_number, face_descriptor, verify_token)
+       VALUES ($1,$2,$3,$4,$5)`,
+      [email, hashed, phone_number, JSON.stringify(face_descriptor), token]
     );
-    res.status(201).json({ message: "User registered successfully." });
+    // 5. Send verification email
+    const verifyLink = `${process.env.BACKEND_URL}/verify-email?token=${token}`;
+    await transporter.sendMail({
+      from: `"Your App" <${process.env.SMTP_USER}>`,
+      to: email,
+      subject: "Please verify your email",
+      html: `
+        <p>Thanks for registering! Click below to verify your email address:</p>
+        <a href="${verifyLink}">Verify Email</a>
+        <p>If you didn’t sign up, you can ignore this.</p>
+      `
+    });
+    res.status(201).json({ message: "Registration successful. Check your email to verify." });
   } catch (err) {
-    console.error("Error during registration:", err);
-    res.status(500).json({ message: "Failed to register user. Please try again." });
+    console.error("Registration error:", err);
+    res.status(500).json({ message: "Failed to register user." });
+  }
+});
+
+app.get("/verify-email", async (req, res) => {
+  const { token } = req.query;
+  if (!token) return res.status(400).send("Missing token.");
+
+  try {
+    const { rows } = await pool.query(
+      "SELECT id FROM users WHERE verify_token=$1",
+      [token]
+    );
+    if (!rows.length) {
+      return res.status(400).send("Invalid or expired link.");
+    }
+    await pool.query(
+      `UPDATE users 
+         SET is_verified=TRUE, verify_token=NULL 
+       WHERE id=$1`,
+      [rows[0].id]
+    );
+    // Redirect to your frontend’s success page
+    res.redirect(`${process.env.FRONTEND_URL}/#/verify-success`);
+  } catch (err) {
+    console.error("Verify error:", err);
+    res.status(500).send("Server error.");
   }
 });
 
