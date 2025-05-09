@@ -116,8 +116,8 @@ app.get('/auth/google',
 app.get(
   '/auth/google/callback',
   passport.authenticate('google', {
-    successRedirect: `${process.env.FRONTEND_URL}/#/mark-attendance`,
-    failureRedirect: `${process.env.FRONTEND_URL}/#/users/login?error=oauth`
+    successRedirect: `https://attendance-tracker-one.vercel.app//#/mark-attendance`,
+    failureRedirect: `https://attendance-tracker-one.vercel.app//#/users/login?error=oauth`
   })
 );
 
