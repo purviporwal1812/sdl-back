@@ -1,6 +1,4 @@
-// index.js
 require("dotenv").config();
-
 const express = require("express");
 const { Pool } = require("pg");
 const passport = require("passport");
@@ -13,37 +11,30 @@ const faceapi = require("face-api.js"); // Adjust import if needed
 const path = require("path");
 const crypto = require('crypto');
 const transporter = require('./mailer');
+
+// Verify SMTP
 transporter.verify((err, success) => {
-  if (err) {
-    console.error("SMTP connection failed:", err);
-  } else {
-    console.log("SMTP ready to send messages");
-  }
+  if (err) console.error("SMTP connection failed:", err);
+  else console.log("SMTP ready to send messages");
 });
-
-
-
-const app = express();
 const PORT = process.env.PORT || 5000;
 
-const pool = new Pool({
-  connectionString: process.env.POSTGRES_URL,
-});
+const app = express();
+
+// PG pool
+const pool = new Pool({ connectionString: process.env.POSTGRES_URL });
 
 // Passport setup
-const initializePassport = require("./passportConfig");
-initializePassport(passport);
-const initializePassportAdmin = require("./passportConfigAdmin");
-initializePassportAdmin(passport);
+require("./passportConfig")(passport);
+require("./passportConfigAdmin")(passport);
 
-// CORS + body parsing + sessions
-app.use(cors({
-  origin: [process.env.CLIENT_URL, process.env.FRONTEND_URL],
-  credentials: true,
-}));
+// Trust proxy (for secure cookies behind Vercel proxy)
+app.set('trust proxy', 1);
+
+// Middlewares
+app.use(cors({ origin: [process.env.CLIENT_URL, process.env.FRONTEND_URL], credentials: true }));
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
-app.set('trust proxy', 1);
 
 app.use(session({
   store: new PgSession({ pool }),
@@ -51,35 +42,18 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   cookie: {
-    secure: true,
+    secure: process.env.NODE_ENV === 'production',
     maxAge: 1000 * 60 * 60, // 1 hour
   }
 }));
 app.use(passport.initialize());
 app.use(passport.session());
 
-// — Google OAuth entrypoint —
+// Rate limiter
+const limiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 1, message: "You have already marked your attendance for this hour." });
 
-const initializeOAuth = require('./passportOauthConfig');
-initializeOAuth(passport);
-app.get('/auth/google',
-  passport.authenticate('google', { scope:['profile','email'] })
-);
-
-// — Google OAuth callback —
-app.get('/auth/google/callback',
-  passport.authenticate('google', {
-    session: true,
-    successRedirect: `${process.env.FRONTEND_URL}/#/mark-attendance`,
-    failureRedirect: `${process.env.FRONTEND_URL}/#/users/register?error=oauth`
-  })
-);
-// Rate limiter for attendance
-const limiter = rateLimit({
-  windowMs: 60 * 60 * 1000,
-  max: 1,
-  message: "You have already marked your attendance for this hour.",
-});
+// Health check
+app.get('/', (req, res) => res.send('Backend running'));
 
 // --- API ROUTES ---
 
