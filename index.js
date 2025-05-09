@@ -128,7 +128,7 @@ app.get('/auth/google/callback', (req, res, next) => {
         return res.redirect('/login?error=oauth');
       }
       console.log('[OAuth] Authentication successful, redirecting to face-verification');
-      return res.redirect('https://attendance-tracker-one.vercel.app/face-verify');
+      return res.redirect('https://attendance-tracker-one.vercel.app/#/mark-attendance');
     });
   })(req, res, next);
 });
