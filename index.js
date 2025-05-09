@@ -39,10 +39,12 @@ app.use(session({
   resave: false,
   saveUninitialized: false,
   cookie: {
-    secure: true,
-    maxAge: 1000 * 60 * 60, // 1 hour
+    secure: true,        // you’re on HTTPS
+    sameSite: 'none',    // allow cross-site cookies
+    maxAge: 1000 * 60 * 60
   }
 }));
+
 
 
 app.use(passport.initialize());
@@ -111,27 +113,13 @@ app.get('/auth/google',
 );
 
 // 2) callback
-app.get('/auth/google/callback', (req, res, next) => {
-  console.log('[OAuth] Callback invoked');
-  passport.authenticate('google', (err, user, info) => {
-    if (err) {
-      console.error('[OAuth] authenticate error:', err, info);
-      return res.redirect('/login?error=oauth');
-    }
-    if (!user) {
-      console.error('[OAuth] No user returned:', info);
-      return res.redirect('/login?error=oauth');
-    }
-    req.logIn(user, loginErr => {
-      if (loginErr) {
-        console.error('[OAuth] logIn error:', loginErr);
-        return res.redirect('/login?error=oauth');
-      }
-      console.log('[OAuth] Authentication successful, redirecting to face-verification');
-      return res.redirect('https://attendance-tracker-one.vercel.app/#/mark-attendance');
-    });
-  })(req, res, next);
-});
+app.get(
+  '/auth/google/callback',
+  passport.authenticate('google', {
+    successRedirect: `${process.env.FRONTEND_URL}/#/mark-attendance`,
+    failureRedirect: `${process.env.FRONTEND_URL}/#/users/login?error=oauth`
+  })
+);
 
 
 
