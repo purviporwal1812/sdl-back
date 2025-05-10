@@ -152,7 +152,7 @@ app.post("/users/login", async (req, res, next) => {
         console.log('[LOGIN] Success for user:', email);
         return res.json({
           message: "Login successful",
-          user: { id: user.id, email: user.email, theme: user.theme }
+          user: { id: user.id, email: user.email }
         });
       });
     } else {
@@ -261,7 +261,7 @@ app.get("/verify-email", async (req, res, next) => {
 
     // 3) Pull back the full user record
     const userRes = await pool.query(
-      "SELECT id, email, theme, face_descriptor, phone_number FROM users WHERE id = $1",
+      "SELECT id, email, face_descriptor, phone_number FROM users WHERE id = $1",
       [userId]
     );
     const user = userRes.rows[0];
@@ -332,31 +332,7 @@ app.post("/users/resend-verification", async (req, res) => {
   }
 });
 
-// THEME ENDPOINTS
-app.get("/users/theme", (req, res) => {
-  console.log('[THEME] GET theme for user:', req.user?.email);
-  if (!req.user) return res.status(401).json({ message: "Not authenticated" });
-  res.json({ theme: req.user.theme });
-});
 
-app.post("/users/theme", async (req, res) => {
-  console.log('[THEME] POST theme:', req.body, 'for', req.user?.email);
-  if (!req.user) return res.status(401).json({ message: "Not authenticated" });
-  const { theme } = req.body;
-  if (!["light", "dark"].includes(theme)) {
-    console.warn('[THEME] Invalid theme value:', theme);
-    return res.status(400).json({ message: "Invalid theme" });
-  }
-  try {
-    await pool.query("UPDATE users SET theme = $1 WHERE id = $2", [theme, req.user.id]);
-    req.user.theme = theme;
-    console.log('[THEME] Theme updated to:', theme, 'for', req.user.email);
-    res.json({ theme });
-  } catch (err) {
-    console.error('[THEME] Error updating theme:', err.stack || err);
-    res.status(500).json({ message: "Could not save theme" });
-  }
-});
 
 // ADMIN LOGIN
 app.post("/admin/login", (req, res, next) => {
@@ -508,7 +484,6 @@ app.get('/users/profile', (req, res) => {
   res.json({
     email:       req.user.email,
     phone_number:req.user.phone_number,
-    theme:       req.user.theme,
     photoUrl:    req.user.photo_url  // make sure you store this in users table
   });
 });
