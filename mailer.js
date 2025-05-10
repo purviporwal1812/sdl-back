@@ -10,5 +10,7 @@ const transporter = nodemailer.createTransport({
     pass: process.env.SMTP_PASS,
   },
 });
-
+transporter.verify()
+  .then(() => console.log('✅ SMTP: Gmail connection OK'))
+  .catch(err => console.error('❌ SMTP: Gmail connection failed', err));
 module.exports = transporter;
