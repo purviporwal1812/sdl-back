@@ -146,24 +146,19 @@ app.post("/users/login", async (req, res, next) => {
     console.log('[LOGIN] Face recognition distance:', distance);
 
     if (distance < 0.6) {
-      req.logIn(user, err => {
-        if (err) {
-          console.error("[LOGIN] Error during login:", err);
-          return res.status(500).json({ message: "Internal Server Error" });
-        }
-        // ensure cookie is written before we send JSON
-        req.session.save(saveErr => {
-          if (saveErr) {
-            console.error("[LOGIN] Session save error:", saveErr);
-            return res.status(500).json({ message: "Session save failed." });
-          }
-          console.log("[LOGIN] Session saved; sending response");
-          res.json({
-            message: "Login successful",
-            user: { id: user.id, email: user.email }
-          });
-        });
-      });
+         req.logIn(user, err => {
+            if (err) return res.status(500).json({ message: "Internal Server Error" });
+        +
+        +      // ensure session cookie is written before we respond
+        +      req.session.save(saveErr => {
+                if (saveErr) {
+                  console.error("[LOGIN] Session save error:", saveErr);
+                  return res.status(500).json({ message: "Session save failed." });
+                }
+                console.log("[LOGIN] Session saved; sending login response");
+                res.json({ message: "Login successful", user: { id: user.id, email: user.email } });
+              });
+            });
       
     } else {
       console.warn('[LOGIN] Face recognition failed for:', email);
@@ -287,19 +282,23 @@ app.get("/verify-email", async (req, res, next) => {
     console.log("[VERIFY-EMAIL] Re-fetched user record:", user.email);
 
     // 4) Log them in and redirect
-    req.logIn(user, err => {
-      if (err) {
-        console.error("[VERIFY-EMAIL] req.logIn error:", err);
-        return next(err);
-      }
-      const base =
-        process.env.NODE_ENV === "production"
-          ? process.env.FRONTEND_URL
-          : process.env.CLIENT_URL;
-      const redirectUrl = `${base.replace(/\/$/, "")}/#/mark-attendance`;
-      console.log("[VERIFY-EMAIL] Redirecting to:", redirectUrl);
-      return res.redirect(redirectUrl);
-    });
+      req.logIn(user, err => {
+          if (err) return next(err);
+      
+          // flush the new session cookie (with authenticated user) over HTTPS
+          req.session.save(saveErr => {
+            if (saveErr) {
+              console.error("[VERIFY-EMAIL] Session save error:", saveErr);
+              return next(saveErr);
+            }
+            console.log("[VERIFY-EMAIL] Session saved; redirecting to front‑end");
+            const base = process.env.NODE_ENV === "production"
+                         ? process.env.FRONTEND_URL
+                         : process.env.CLIENT_URL;
+            const redirectUrl = `${base.replace(/\/$/, "")}/#/mark-attendance`;
+            res.redirect(redirectUrl);
+          });
+        });
   } catch (err) {
     console.error("[VERIFY-EMAIL] caught exception:", err);
     next(err);
