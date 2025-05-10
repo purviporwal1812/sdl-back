@@ -11,6 +11,68 @@ const faceapi = require("face-api.js");
 const path = require("path");
 const crypto = require('crypto');
 const transporter = require('./mailer');
+
+
+
+// Load and log environment
+console.log("[CONFIG] Loading environment variables...");
+console.log("[CONFIG] POSTGRES_URL =", process.env.POSTGRES_URL);
+console.log("[CONFIG] CLIENT_URL =", process.env.CLIENT_URL);
+console.log("[CONFIG] BACKEND_URL =", process.env.BACKEND_URL);
+console.log("[CONFIG] FRONTEND_URL =", process.env.FRONTEND_URL);
+
+// Verify SMTP connectivity
+transporter.verify((err, success) => {
+  if (err) console.error("[MAILER] SMTP connection failed:", err.stack || err);
+  else console.log("[MAILER] SMTP ready to send messages");
+});
+const app = express();
+const PORT = process.env.PORT || 5000;
+
+// PG pool
+const pool = new Pool({ 
+  connectionString: process.env.POSTGRES_URL 
+});
+
+// Passport setup
+const initializePassport = require("./passportConfig");
+initializePassport(passport);
+const initializePassportAdmin = require("./passportConfigAdmin");
+initializePassportAdmin(passport);
+
+
+
+// Middlewares
+app.use(cors({
+  origin: [process.env.CLIENT_URL, process.env.FRONTEND_URL],
+  credentials: true 
+  }));
+app.use(express.urlencoded({ extended: false }));
+app.use(express.json());
+// Trust proxy
+app.set('trust proxy', 1);
+
+app.use(session({
+  store: new PgSession({ pool }),
+  secret: process.env.SESSION_SECRET,
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    secure: true,
+    maxAge: 1000 * 60 * 60, // 1 hour
+  }
+}));
+app.use(passport.initialize());
+app.use(passport.session());
+
+// Rate limiter for marking attendance
+const limiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 1, message: "You have already marked your attendance for this hour." });
+
+// Health check
+app.get('/', (req, res) => {
+  console.log('[HEALTH] GET /');
+  res.send('Backend running');
+});
 const multer  = require("multer");
 const fs      = require("fs");
 
@@ -45,87 +107,9 @@ const fileFilter = (req, file, cb) => {
 
 const upload = multer({ storage, fileFilter, limits: { fileSize: 5 * 1024 * 1024 } }); // 5MB limit
 
-
-
-// Load and log environment
-console.log("[CONFIG] Loading environment variables...");
-console.log("[CONFIG] POSTGRES_URL =", process.env.POSTGRES_URL);
-console.log("[CONFIG] CLIENT_URL =", process.env.CLIENT_URL);
-console.log("[CONFIG] BACKEND_URL =", process.env.BACKEND_URL);
-console.log("[CONFIG] FRONTEND_URL =", process.env.FRONTEND_URL);
-
-// Verify SMTP connectivity
-transporter.verify((err, success) => {
-  if (err) console.error("[MAILER] SMTP connection failed:", err.stack || err);
-  else console.log("[MAILER] SMTP ready to send messages");
-});
-
-const PORT = process.env.PORT || 5000;
-const app = express();
-
-// PG pool
-const pool = new Pool({ connectionString: process.env.POSTGRES_URL });
-pool.on('connect', () => console.log('[DB] Connected to Postgres')); 
-pool.on('error', (err) => console.error('[DB] Unexpected error on idle client:', err.stack || err));
-
-// Passport setup
-require("./passportConfig")(passport);
-require("./passportConfigAdmin")(passport);
-
-// Trust proxy
-app.set('trust proxy', 1);
-
-// Middlewares
-app.use(cors({ origin: [process.env.CLIENT_URL, process.env.FRONTEND_URL], credentials: true }));
-app.use(express.urlencoded({ extended: false }));
-app.use(express.json());
-
-app.use(session({
-  store: new PgSession({ pool }),
-  secret: process.env.SESSION_SECRET,
-  resave: false,
-  saveUninitialized: false,
-  cookie: {
-    secure: process.env.NODE_ENV === 'production',
-    maxAge: 1000 * 60 * 60, // 1 hour
-  }
-}));
-app.use(passport.initialize());
-app.use(passport.session());
-
-// Rate limiter for marking attendance
-const limiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 1, message: "You have already marked your attendance for this hour." });
-
-// Health check
-app.get('/', (req, res) => {
-  console.log('[HEALTH] GET /');
-  res.send('Backend running');
-});
 // Serve the uploads folder statically
 app.use("/uploads", express.static(uploadDir));
-// POST profile photo upload
-app.post(
-  "/users/profile/photo",
-  upload.single("photo"),
-  async (req, res, next) => {
-    if (!req.user) return res.status(401).json({ message: "Not authenticated" });
-    if (!req.file) return res.status(400).json({ message: "No file uploaded" });
 
-    try {
-      // Build the URL that the front-end can fetch
-      const photoUrl = `${process.env.BACKEND_URL.replace(/\/$/, "")}/uploads/${req.file.filename}`;
-      await pool.query("UPDATE users SET photo_url = $1 WHERE id = $2", [
-        photoUrl,
-        req.user.id,
-      ]);
-      console.log("[PROFILE] Saved photo_url for user:", req.user.email, photoUrl);
-      res.json({ photoUrl });
-    } catch (err) {
-      console.error("[PROFILE] Error saving photo_url:", err.stack || err);
-      next(err);
-    }
-  }
-);
 
 // --- API ROUTES ---
 
