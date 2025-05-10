@@ -114,7 +114,9 @@ app.use("/uploads", express.static(uploadDir));
 
 // --- API ROUTES ---
 
+
 // USER LOGIN (face + password)
+
 app.post("/users/login", async (req, res, next) => {
   console.log('[LOGIN] Request body:', req.body);
   const { email, password, face_descriptor } = req.body;
@@ -224,7 +226,16 @@ app.post("/users/register", async (req, res) => {
     res.status(500).json({ message: "Failed to register user." });
   }
 });
-
+// ── Add this immediately after your other /users routes, but before your
+//     “catch‑all” error handler and before app.listen(...)
+app.get('/users/verify-session', (req, res) => {
+  console.log('[VERIFY-SESSION] user:', req.user?.email);
+  if (req.isAuthenticated && req.isAuthenticated()) {
+    return res.sendStatus(200);
+  } else {
+    return res.sendStatus(401);
+  }
+});
 // EMAIL VERIFICATION
 app.get("/verify-email", async (req, res, next) => {
   try {
@@ -268,19 +279,24 @@ app.get("/verify-email", async (req, res, next) => {
     console.log("[VERIFY-EMAIL] Re-fetched user record:", user.email);
 
     // 4) Log them in and redirect
-    req.logIn(user, err => {
-      if (err) {
-        console.error("[VERIFY-EMAIL] req.logIn error:", err);
-        return next(err);
-      }
-      const base =
-        process.env.NODE_ENV === "production"
-          ? process.env.FRONTEND_URL
-          : process.env.CLIENT_URL;
-      const redirectUrl = `${base.replace(/\/$/, "")}/#/mark-attendance`;
-      console.log("[VERIFY-EMAIL] Redirecting to:", redirectUrl);
-      return res.redirect(redirectUrl);
+// inside your POST /users/login, replace req.logIn callback with:
+req.logIn(user, err => {
+  if (err) return res.status(500).json({ message: "Internal Server Error" });
+
+  // explicitly save the session before sending response
+  req.session.save(saveErr => {
+    if (saveErr) {
+      console.error("[LOGIN] Session save error:", saveErr);
+      return res.status(500).json({ message: "Session save failed." });
+    }
+    console.log("[LOGIN] Session saved, sending response");
+    res.json({
+      message: "Login successful",
+      user: { id: user.id, email: user.email }
     });
+  });
+});
+
   } catch (err) {
     console.error("[VERIFY-EMAIL] caught exception:", err);
     next(err);
