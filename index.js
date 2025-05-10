@@ -226,66 +226,67 @@ app.post("/users/register", async (req, res) => {
 });
 
 // EMAIL VERIFICATION
-app.get("/verify-email", (req, res, next) => {
-  const { token } = req.query;
-  console.log('[VERIFY-EMAIL] Incoming token:', token);
-  if (!token) {
-    console.warn('[VERIFY-EMAIL] No token in query');
-    return res.status(400).send("Missing token.");
-  }
+app.get("/verify-email", async (req, res, next) => {
+  try {
+    const rawToken = req.query.token;
+    if (!rawToken) {
+      console.warn("[VERIFY-EMAIL] No token in query");
+      return res.status(400).send("Missing token.");
+    }
 
-  (async () => {
-    try {
-      // 1) Lookup user by token
-      const { rows } = await pool.query(
-        "SELECT id FROM users WHERE verify_token = $1",
-        [token]
-      );
-      console.log('[VERIFY-EMAIL] DB lookup rows:', rows);
-      if (!rows.length) {
-        console.warn('[VERIFY-EMAIL] Invalid or expired token:', token);
-        return res.status(400).send("Invalid or expired link.");
+    // Trim any stray whitespace or URL‑encoding artifacts
+    const token = String(rawToken).trim();
+    console.log("[VERIFY-EMAIL] Incoming token:", token);
+
+    // 1) Lookup user by token and log what we found
+    const { rowCount, rows } = await pool.query(
+      "SELECT id, verify_token FROM users WHERE verify_token = $1",
+      [token]
+    );
+    if (rowCount === 0) {
+      console.warn("[VERIFY-EMAIL] No matching token in DB for:", token);
+      return res.status(400).send("Invalid or expired link.");
+    }
+    const { id: userId, verify_token: dbToken } = rows[0];
+    console.log("[VERIFY-EMAIL] DB token matches:", dbToken);
+
+    // 2) Mark verified and null out the token
+    await pool.query(
+      `UPDATE users
+         SET is_verified = TRUE, verify_token = NULL
+       WHERE id = $1`,
+      [userId]
+    );
+    console.log("[VERIFY-EMAIL] User marked verified in DB, userId =", userId);
+
+    // 3) Pull back the full user record
+    const userRes = await pool.query(
+      "SELECT id, email, theme, face_descriptor, phone_number FROM users WHERE id = $1",
+      [userId]
+    );
+    const user = userRes.rows[0];
+    console.log("[VERIFY-EMAIL] Re-fetched user record:", user.email);
+
+    // 4) Log them in and redirect
+    req.logIn(user, err => {
+      if (err) {
+        console.error("[VERIFY-EMAIL] req.logIn error:", err);
+        return next(err);
       }
-      const userId = rows[0].id;
-      console.log('[VERIFY-EMAIL] Found user ID:', userId);
-
-      // 2) Mark verified
-      await pool.query(
-        `UPDATE users SET is_verified = TRUE, verify_token = NULL WHERE id = $1`,
-        [userId]
-      );
-      console.log('[VERIFY-EMAIL] User marked verified in DB');
-
-      // 3) Re-fetch user
-      const userRes = await pool.query(
-        "SELECT id, email, theme, face_descriptor, phone_number FROM users WHERE id = $1",
-        [userId]
-      );
-      const user = userRes.rows[0];
-      console.log('[VERIFY-EMAIL] Re-fetched user record:', user);
-
-      // 4) Log in via passport
-      req.logIn(user, (err) => {
-        if (err) {
-          console.error('[VERIFY-EMAIL] req.logIn error:', err.stack || err);
-          return next(err);
-        }
-        console.log('[VERIFY-EMAIL] Passport login successful for:', user.email);
-
-        // 5) Redirect based on env
-        const targetBase = process.env.NODE_ENV === "production"
+      const base =
+        process.env.NODE_ENV === "production"
           ? process.env.FRONTEND_URL
           : process.env.CLIENT_URL;
-        const redirectUrl = `${targetBase.replace(/\/$/, "")}/#/mark-attendance`;
-        console.log('[VERIFY-EMAIL] Redirecting to:', redirectUrl);
-        return res.redirect(redirectUrl);
-      });
-    } catch (err) {
-      console.error('[VERIFY-EMAIL] caught exception:', err.stack || err);
-      next(err);
-    }
-  })();
+      const redirectUrl = `${base.replace(/\/$/, "")}/#/mark-attendance`;
+      console.log("[VERIFY-EMAIL] Redirecting to:", redirectUrl);
+      return res.redirect(redirectUrl);
+    });
+  } catch (err) {
+    console.error("[VERIFY-EMAIL] caught exception:", err);
+    next(err);
+  }
 });
+
 
 // RESEND VERIFICATION EMAIL
 app.post("/users/resend-verification", async (req, res) => {
