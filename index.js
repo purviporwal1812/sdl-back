@@ -239,71 +239,77 @@ app.get('/users/verify-session', (req, res) => {
     return res.sendStatus(401);
   }
 });
+// ——————————————————————————————————————————————————————————————
 // EMAIL VERIFICATION
+// ——————————————————————————————————————————————————————————————
 app.get("/verify-email", async (req, res, next) => {
   try {
     const rawToken = req.query.token;
+    const base = process.env.NODE_ENV === "production"
+      ? process.env.FRONTEND_URL
+      : process.env.CLIENT_URL;
+    const frontBase = base.replace(/\/$/, "") + "/#/";
+
+    // 1) Missing token → failure page
     if (!rawToken) {
-      console.warn("[VERIFY-EMAIL] No token in query");
-      return res.status(400).send("Missing token.");
+      console.warn("[VERIFY-EMAIL] No token provided");
+      return res.redirect(frontBase + "verify-failure");
     }
 
-    // Trim any stray whitespace or URL‑encoding artifacts
     const token = String(rawToken).trim();
     console.log("[VERIFY-EMAIL] Incoming token:", token);
 
-    // 1) Lookup user by token and log what we found
+    // 2) Lookup user by token
     const { rowCount, rows } = await pool.query(
-      "SELECT id, verify_token FROM users WHERE verify_token = $1",
+      "SELECT id FROM users WHERE verify_token = $1",
       [token]
     );
     if (rowCount === 0) {
-      console.warn("[VERIFY-EMAIL] No matching token in DB for:", token);
-      return res.status(400).send("Invalid or expired link.");
+      console.warn("[VERIFY-EMAIL] Invalid or expired token:", token);
+      return res.redirect(frontBase + "verify-failure");
     }
-    const { id: userId, verify_token: dbToken } = rows[0];
-    console.log("[VERIFY-EMAIL] DB token matches:", dbToken);
 
-    // 2) Mark verified and null out the token
+    const userId = rows[0].id;
+
+    // 3) Mark verified & clear token
     await pool.query(
       `UPDATE users
-         SET is_verified = TRUE, verify_token = NULL
+         SET is_verified = TRUE,
+             verify_token = NULL
        WHERE id = $1`,
       [userId]
     );
-    console.log("[VERIFY-EMAIL] User marked verified in DB, userId =", userId);
+    console.log("[VERIFY-EMAIL] User marked verified, id =", userId);
 
-    // 3) Pull back the full user record
-    const userRes = await pool.query(
-      "SELECT id, email, face_descriptor, phone_number FROM users WHERE id = $1",
+    // 4) Re-fetch user record for login
+    const { rows: userRows } = await pool.query(
+      "SELECT id, email, phone_number, face_descriptor FROM users WHERE id = $1",
       [userId]
     );
-    const user = userRes.rows[0];
-    console.log("[VERIFY-EMAIL] Re-fetched user record:", user.email);
+    const user = userRows[0];
 
-    // 4) Log them in and redirect
-      req.logIn(user, err => {
-          if (err) return next(err);
-      
-          // flush the new session cookie (with authenticated user) over HTTPS
-          req.session.save(saveErr => {
-            if (saveErr) {
-              console.error("[VERIFY-EMAIL] Session save error:", saveErr);
-              return next(saveErr);
-            }
-            console.log("[VERIFY-EMAIL] Session saved; redirecting to front‑end");
-            const base = process.env.NODE_ENV === "production"
-                         ? process.env.FRONTEND_URL
-                         : process.env.CLIENT_URL;
-            const redirectUrl = `${base.replace(/\/$/, "")}/#/mark-attendance`;
-            res.redirect(redirectUrl);
-          });
-        });
+    // 5) Log them in and redirect to success page
+    req.logIn(user, err => {
+      if (err) return next(err);
+
+      req.session.save(saveErr => {
+        if (saveErr) return next(saveErr);
+
+        console.log("[VERIFY-EMAIL] Session saved; redirecting to success page");
+        return res.redirect(frontBase + "verify-success");
+      });
+    });
+
   } catch (err) {
-    console.error("[VERIFY-EMAIL] caught exception:", err);
-    next(err);
+    console.error("[VERIFY-EMAIL] Unexpected error:", err);
+    // On any error, send to failure
+    const base = process.env.NODE_ENV === "production"
+      ? process.env.FRONTEND_URL
+      : process.env.CLIENT_URL;
+    return res.redirect(base.replace(/\/$/, "") + "/#/verify-failure");
   }
 });
+
 
 
 // RESEND VERIFICATION EMAIL
