@@ -9,9 +9,7 @@ const PgSession = require("connect-pg-simple")(session);
 const bcrypt = require("bcrypt");
 const faceapi = require("face-api.js");
 const path = require("path");
-const crypto = require('crypto');
 const transporter = require('./mailer');
-
 
 
 // Load and log environment
@@ -44,9 +42,11 @@ initializePassportAdmin(passport);
 
 // Middlewares
 app.use(cors({
-  origin: [process.env.CLIENT_URL, process.env.FRONTEND_URL],
-  credentials: true 
-  }));
+  origin: process.env.NODE_ENV === "production"
+    ? [process.env.CLIENT_URL, process.env.FRONTEND_URL]
+    : "*",
+  credentials: true
+}));
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 // Trust proxy
@@ -57,9 +57,9 @@ app.use(session({
   secret: process.env.SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
-  sameSite: 'none',
+  sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
   cookie: {
-    secure: true,
+    secure: process.env.NODE_ENV === "production",
     maxAge: 1000 * 60 * 60, // 1 hour
   }
 }));
@@ -67,7 +67,12 @@ app.use(passport.initialize());
 app.use(passport.session());
 
 // Rate limiter for marking attendance
-const limiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 1, message: "You have already marked your attendance for this hour." });
+const limiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 1,
+  keyGenerator: (req) => req.user?.id || req.ip,
+  message: "You have already marked your attendance for this hour."
+});
 
 // Health check
 app.get('/', (req, res) => {
@@ -106,8 +111,14 @@ const fileFilter = (req, file, cb) => {
   }
 };
 
-const upload = multer({ storage, fileFilter, limits: { fileSize: 5 * 1024 * 1024 } }); // 5MB limit
-
+const upload = multer({
+  storage,
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith("image/")) cb(null, true);
+    else cb(new Error("Only image files are allowed."), false);
+  },
+  limits: { fileSize: 5 * 1024 * 1024 }
+});
 // Serve the uploads folder statically
 app.use("/uploads", express.static(uploadDir));
 
@@ -117,244 +128,252 @@ app.use("/uploads", express.static(uploadDir));
 
 // USER LOGIN (face + password)
 
-app.post("/users/login", async (req, res, next) => {
-  console.log('[LOGIN] Request body:', req.body);
-  const { email, password, face_descriptor } = req.body;
+app.post("/users/login", async (req, res) => {
+  console.log("[LOGIN] ➥ Entered login handler");
+  console.log("[LOGIN] ➥ Payload:", req.body);
 
+  const { email, password, face_descriptor } = req.body;
   if (!face_descriptor) {
-    console.warn('[LOGIN] Missing face_descriptor');
+    console.warn("[LOGIN] ✖ Missing face_descriptor");
     return res.status(400).json({ message: "Face descriptor is required." });
   }
+
   try {
-    const userResult = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
-    const user = userResult.rows[0];
-    if (!user) {
-      console.warn('[LOGIN] User not found for email:', email);
+    console.log("[LOGIN] ➥ Fetching user by email:", email);
+    const { rows } = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
+    if (!rows.length) {
+      console.warn("[LOGIN] ✖ No user found for:", email);
       return res.status(400).json({ message: "User not found." });
     }
+
+    const user = rows[0];
+    console.log("[LOGIN] ✔ User fetched:", { id: user.id, is_verified: user.is_verified });
+
     if (!user.is_verified) {
-      console.warn('[LOGIN] Attempt to login before verification for:', email);
-      return res.status(403).json({ message: "Please verify your email before logging in." });
-    }
-    if (!user.face_descriptor) {
-      console.warn('[LOGIN] No face_descriptor stored for user:', email);
-      return res.status(400).json({ message: "No face descriptor found for user." });
+      console.warn("[LOGIN] ✖ Email not verified for:", email);
+      return res.status(403).json({ message: "Please verify your email first." });
     }
 
-    const storedDescriptor = user.face_descriptor;
+    if (!user.face_descriptor) {
+      console.warn("[LOGIN] ✖ No stored face_descriptor for user:", user.id);
+      return res.status(400).json({ message: "No face descriptor found." });
+    }
+
+    console.log("[LOGIN] ➥ Comparing face descriptors");
+    const storedDescriptor = JSON.parse(user.face_descriptor);
     const distance = faceapi.euclideanDistance(storedDescriptor, face_descriptor);
-    console.log('[LOGIN] Face recognition distance:', distance);
+    console.log("[LOGIN] ✔ Face-distance:", distance);
 
     if (distance < 0.6) {
-         req.logIn(user, err => {
-            if (err) return res.status(500).json({ message: "Internal Server Error" });
-        +
-        +      // ensure session cookie is written before we respond
-        +      req.session.save(saveErr => {
-                if (saveErr) {
-                  console.error("[LOGIN] Session save error:", saveErr);
-                  return res.status(500).json({ message: "Session save failed." });
-                }
-                console.log("[LOGIN] Session saved; sending login response");
-                res.json({ message: "Login successful", user: { id: user.id, email: user.email } });
-              });
-            });
-      
+      console.log("[LOGIN] ➥ Face match succeeded, logging in user", user.id);
+      req.logIn(user, (err) => {
+        if (err) {
+          console.error("[LOGIN] ✖ req.logIn error:", err);
+          return res.status(500).json({ message: "Internal Server Error" });
+        }
+        req.session.save((saveErr) => {
+          if (saveErr) {
+            console.error("[LOGIN] ✖ Session save error:", saveErr);
+            return res.status(500).json({ message: "Session save failed." });
+          }
+          console.log("[LOGIN] ✔ Login successful for user", user.id);
+          res.json({ message: "Login successful", user: { id: user.id, email: user.email } });
+        });
+      });
     } else {
-      console.warn('[LOGIN] Face recognition failed for:', email);
-      return res.status(400).json({ message: "Face recognition failed." });
+      console.warn("[LOGIN] ✖ Face match failed for user", user.id);
+      res.status(400).json({ message: "Face recognition failed." });
     }
   } catch (err) {
-    console.error('[LOGIN] Error during login:', err.stack || err);
+    console.error("[LOGIN] ✖ Unexpected error:", err);
     res.status(500).json({ message: "Internal Server Error" });
   }
 });
 
-// USER REGISTER
+
+// USER REGISTER (with verification code)
 app.post("/users/register", async (req, res) => {
-  console.log('[REGISTER] Request body:', req.body);
+  console.log("[REGISTER] ➥ Entered register handler");
+  console.log("[REGISTER] ➥ Payload:", req.body);
+
   const { email, password, phone_number, face_descriptor } = req.body;
   try {
     // 1. Check existing
+    console.log("[REGISTER] ➥ Checking if", email, "already exists");
     const exists = await pool.query("SELECT 1 FROM users WHERE email=$1", [email]);
+    console.log("[REGISTER] ➥ Existing rows:", exists.rows.length);
+
     if (exists.rows.length) {
-      console.warn('[REGISTER] Email already in use:', email);
+      console.warn("[REGISTER] ✖ Email already in use:", email);
       return res.status(400).json({ message: "Email already in use." });
     }
 
     // 2. Hash password
+    console.log("[REGISTER] ➥ Hashing password for:", email);
     const hashed = await bcrypt.hash(password, 10);
-    console.log('[REGISTER] Password hashed for:', email);
+    console.log("[REGISTER] ✔ Password hashed");
 
-    // 3. Generate verification token
-    const token = crypto.randomBytes(32).toString("hex");
-    console.log('[REGISTER] Verification token generated');
+    // 3. Generate code
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    console.log("[REGISTER] ➥ Generated code:", code);
 
     // 4. Prepare face_descriptor
     const fd = face_descriptor ? JSON.stringify(face_descriptor) : null;
-    console.log('[REGISTER] face_descriptor prepared:', fd ? 'present' : 'null');
+    console.log("[REGISTER] ➥ face_descriptor present?", Boolean(fd));
 
-    // 5. Insert user
-    console.log('[REGISTER] Inserting user into DB:', email, phone_number, fd);
+    // 5. Insert into DB
+    console.log("[REGISTER] ➥ Inserting new user record");
     await pool.query(
       `INSERT INTO users 
-         (email, password, phone_number, face_descriptor, verify_token)
-       VALUES ($1,$2,$3,$4,$5)`,
-      [email, hashed, phone_number, fd, token]
+         (email, password, phone_number, face_descriptor, verify_code, code_expires_at)
+       VALUES ($1,$2,$3,$4,$5, NOW() + interval '1 hour')`,
+      [email, hashed, phone_number, fd, code]
     );
-    console.log('[REGISTER] User inserted into DB:', email);
+    console.log("[REGISTER] ✔ User inserted with verification code");
 
-    // 6. Send verification email
-    const verifyLink = `${process.env.BACKEND_URL}/verify-email?token=${token}`;
-    try {
-      await transporter.sendMail({
-        from: `"Your App" <${process.env.SMTP_USER}>`,
-        to: email,
-        subject: "Please verify your email",
-        html: `
-          <p>Thanks for registering! Click below to verify your email address:</p>
-          <a href="${verifyLink}">Verify Email</a>
-          <p>If you didn’t sign up, you can ignore this.</p>
-        `
-      });
-      console.log('[REGISTER] Verification email sent to:', email);
-    } catch (emailErr) {
-      console.error('[REGISTER] Error sending verification email:', emailErr.stack || emailErr);
-      return res.status(500).json({ message: "Failed to send verification email." });
-    }
+    // 6. Send email
+    console.log("[REGISTER] ➥ Sending email via transporter");
+    await transporter.sendMail({
+      from: `"Your App" <${process.env.SMTP_USER}>`,
+      to: email,
+      subject: "Your verification code",
+      html: `<p>Your code is <h2>${code}</h2></p>`
+    });
+    console.log("[REGISTER] ✔ Verification email sent to", email);
 
-    res.status(201).json({ message: "Registration successful. Check your email to verify." });
+    res.status(201).json({ message: "Registration successful. Check your email." });
   } catch (err) {
-    console.error('[REGISTER] Registration error:', err.stack || err);
+    console.error("[REGISTER] ✖ Error:", err);
     res.status(500).json({ message: "Failed to register user." });
   }
 });
-// ── Add this immediately after your other /users routes, but before your
-//     “catch‑all” error handler and before app.listen(...)
-app.get('/users/verify-session', (req, res) => {
-  console.log('[VERIFY-SESSION] user:', req.user?.email);
-  if (req.isAuthenticated && req.isAuthenticated()) {
-    return res.sendStatus(200);
-  } else {
-    return res.sendStatus(401);
-  }
-});
-// ——————————————————————————————————————————————————————————————
-// EMAIL VERIFICATION
-// ——————————————————————————————————————————————————————————————
-app.get("/verify-email", async (req, res, next) => {
-  try {
-    const rawToken = req.query.token;
-    const base = process.env.NODE_ENV === "production"
-      ? process.env.FRONTEND_URL
-      : process.env.CLIENT_URL;
-    const frontBase = base.replace(/\/$/, "") + "/#/";
 
-    // 1) Missing token → failure page
-    if (!rawToken) {
-      console.warn("[VERIFY-EMAIL] No token provided");
-      return res.redirect(frontBase + "verify-failure");
-    }
-
-    const token = String(rawToken).trim();
-    console.log("[VERIFY-EMAIL] Incoming token:", token);
-
-    // 2) Lookup user by token
-    const { rowCount, rows } = await pool.query(
-      "SELECT id FROM users WHERE verify_token = $1",
-      [token]
-    );
-    if (rowCount === 0) {
-      console.warn("[VERIFY-EMAIL] Invalid or expired token:", token);
-      return res.redirect(frontBase + "verify-failure");
-    }
-
-    const userId = rows[0].id;
-
-    // 3) Mark verified & clear token
-    await pool.query(
-      `UPDATE users
-         SET is_verified = TRUE,
-             verify_token = NULL
-       WHERE id = $1`,
-      [userId]
-    );
-    console.log("[VERIFY-EMAIL] User marked verified, id =", userId);
-
-    // 4) Re-fetch user record for login
-    const { rows: userRows } = await pool.query(
-      "SELECT id, email, phone_number, face_descriptor FROM users WHERE id = $1",
-      [userId]
-    );
-    const user = userRows[0];
-
-    // 5) Log them in and redirect to success page
-    req.logIn(user, err => {
-      if (err) return next(err);
-
-      req.session.save(saveErr => {
-        if (saveErr) return next(saveErr);
-
-        console.log("[VERIFY-EMAIL] Session saved; redirecting to success page");
-        return res.redirect(frontBase + "verify-success");
-      });
-    });
-
-  } catch (err) {
-    console.error("[VERIFY-EMAIL] Unexpected error:", err);
-    // On any error, send to failure
-    const base = process.env.NODE_ENV === "production"
-      ? process.env.FRONTEND_URL
-      : process.env.CLIENT_URL;
-    return res.redirect(base.replace(/\/$/, "") + "/#/verify-failure");
-  }
-});
-
-
-
-// RESEND VERIFICATION EMAIL
+// RESEND VERIFICATION CODE
 app.post("/users/resend-verification", async (req, res) => {
-  console.log('[RESEND] Request body:', req.body);
+  console.log("[RESEND] ➥ Entered resend-verification handler");
+  console.log("[RESEND] ➥ Payload:", req.body);
+
   const { email } = req.body;
   try {
+    console.log("[RESEND] ➥ Checking user:", email);
     const { rows } = await pool.query(
       "SELECT id, is_verified FROM users WHERE email = $1",
       [email]
     );
+    console.log("[RESEND] ➥ Rows found:", rows.length);
+
     if (!rows.length) {
-      console.warn('[RESEND] User not found:', email);
+      console.warn("[RESEND] ✖ User not found:", email);
       return res.status(404).json({ message: "User not found." });
     }
     if (rows[0].is_verified) {
-      console.warn('[RESEND] Already verified:', email);
+      console.warn("[RESEND] ✖ Already verified:", email);
       return res.status(400).json({ message: "Already verified." });
     }
-    const token = crypto.randomBytes(32).toString("hex");
-    await pool.query(
-      "UPDATE users SET verify_token = $1 WHERE id = $2",
-      [token, rows[0].id]
-    );
-    console.log('[RESEND] New verification token saved for:', email);
 
-    const link = `${process.env.BACKEND_URL}/verify-email?token=${token}`;
-    try {
-      await transporter.sendMail({
-        from: `"Your App" <${process.env.SMTP_USER}>`,
-        to: email,
-        subject: "Please verify your email",
-        html: `<p>Click to verify:</p><a href="${link}">Verify Email</a>`
-      });
-      console.log('[RESEND] Verification email resent to:', email);
-    } catch (emailErr) {
-      console.error('[RESEND] Error resending email:', emailErr.stack || emailErr);
-      return res.status(500).json({ message: "Failed to resend." });
-    }
-    res.json({ message: "Verification email sent." });
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    console.log("[RESEND] ➥ Generated new code:", code);
+
+    await pool.query(
+      `UPDATE users 
+         SET verify_code = $1, code_expires_at = NOW() + interval '1 hour'
+       WHERE id = $2`,
+      [code, rows[0].id]
+    );
+    console.log("[RESEND] ✔ Saved new code for user ID:", rows[0].id);
+
+    await transporter.sendMail({
+      from: `"Your App" <${process.env.SMTP_USER}>`,
+      to: email,
+      subject: "Your new verification code",
+      html: `<p>Your new verification code is:</p><h2>${code}</h2><p>Expires in 1 hour.</p>`
+    });
+    console.log("[RESEND] ✔ Email sent to:", email);
+
+    res.json({ message: "Verification code sent." });
   } catch (err) {
-    console.error('[RESEND] Resend error:', err.stack || err);
+    console.error("[RESEND] ✖ Error:", err);
     res.status(500).json({ message: "Failed to resend." });
   }
 });
+
+
+// NEW: VERIFY CODE ENDPOINT
+app.post("/users/verify-code", async (req, res) => {
+  console.log("[VERIFY-CODE] ➥ Entered verify-code handler");
+  console.log("[VERIFY-CODE] ➥ Payload:", req.body);
+
+  const { email, code } = req.body;
+  try {
+    console.log("[VERIFY-CODE] ➥ Looking up user with code:", code);
+    const { rows } = await pool.query(
+      `SELECT id, code_expires_at 
+         FROM users 
+        WHERE email = $1 
+          AND verify_code = $2`,
+      [email, code]
+    );
+    console.log("[VERIFY-CODE] ➥ Rows found:", rows.length);
+
+    if (!rows.length) {
+      console.warn("[VERIFY-CODE] ✖ No matching code for:", email);
+      return res.status(400).json({ message: "Invalid verification code." });
+    }
+
+    const user = rows[0];
+    console.log("[VERIFY-CODE] ✔ Found user ID:", user.id, "expires at:", user.code_expires_at);
+
+    if (new Date(user.code_expires_at) < new Date()) {
+      console.warn("[VERIFY-CODE] ✖ Code expired for user ID:", user.id);
+      return res.status(400).json({ message: "Verification code expired." });
+    }
+
+    console.log("[VERIFY-CODE] ➥ Marking user verified and clearing code");
+    await pool.query(
+      `UPDATE users 
+          SET is_verified = TRUE, 
+              verify_code = NULL, 
+              code_expires_at = NULL 
+        WHERE id = $1`,
+      [user.id]
+    );
+    console.log("[VERIFY-CODE] ✔ Updated user ID", user.id, "to verified");
+
+    console.log("[VERIFY-CODE] ➥ Fetching user data for session login");
+    const { rows: userRows } = await pool.query(
+      `SELECT id, email, phone_number, face_descriptor 
+         FROM users 
+        WHERE id = $1`,
+      [user.id]
+    );
+    const verifiedUser = userRows[0];
+    console.log("[VERIFY-CODE] ✔ Retrieved user for session:", verifiedUser);
+
+    console.log("[VERIFY-CODE] ➥ Calling req.logIn()");
+    req.logIn(verifiedUser, (err) => {
+      if (err) {
+        console.error("[VERIFY-CODE] ✖ req.logIn error:", err);
+        return res.status(500).json({ message: "Login after verification failed." });
+      }
+      req.session.save((saveErr) => {
+        if (saveErr) {
+          console.error("[VERIFY-CODE] ✖ Session save error:", saveErr);
+          return res.status(500).json({ message: "Session save failed." });
+        }
+        console.log("[VERIFY-CODE] ✔ Verification complete, user logged in:", verifiedUser.id);
+        res.json({
+          message: "Email verified and logged in.",
+          user: { id: verifiedUser.id, email: verifiedUser.email }
+        });
+      });
+    });
+
+  } catch (err) {
+    console.error("[VERIFY-CODE] ✖ Unexpected error:", err);
+    res.status(500).json({ message: "Verification failed." });
+  }
+});
+
 
 
 
