@@ -170,19 +170,10 @@ app.post("/users/login", async (req, res) => {
     }
 
     console.log("[LOGIN] ➥ Comparing face descriptors");
-  let storedDescriptor;
-  try {
-    storedDescriptor = JSON.parse(user.face_descriptor);
-  } catch (parseErr) {
-      console.error(
-      "[LOGIN] ✖ Invalid stored face_descriptor JSON:",
-     user.face_descriptor,
-     parseErr
-   );
-    return res
-      .status(500)
-     .json({ message: "Internal error processing face data." });
-  }    const distance = faceapi.euclideanDistance(storedDescriptor, face_descriptor);
+    const storedDescriptor = user.face_descriptor;
+    if (!storedDescriptor) {
+      return res.status(400).json({ message: "No face descriptor found for user." });
+    }    const distance = faceapi.euclideanDistance(storedDescriptor, face_descriptor);
     console.log("[LOGIN] ✔ Face-distance:", distance);
 
     if (distance < 0.6) {
