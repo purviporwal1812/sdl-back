@@ -41,34 +41,36 @@ initializePassportAdmin(passport);
 
 
 // Middlewares
-// 1. Build a CORS options object that exactly matches your front‑end origins
 const corsOptions = {
   origin: process.env.NODE_ENV === "production"
-    ? [process.env.CLIENT_URL, process.env.FRONTEND_URL]  // e.g. ["https://your-app.vercel.app"]
-    : "http://localhost:3000",                            // your dev front‑end
+    ? [process.env.CLIENT_URL, process.env.FRONTEND_URL]
+    : "*",
   credentials: true,
   methods: ["GET","POST","PUT","DELETE","OPTIONS"],
-  allowedHeaders: ["Content-Type","Authorization"]
+  allowedHeaders: ["Content-Type","Authorization"],
 };
 
-// 2. Handle ALL preflight requests
+app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
 
-// 3. Apply CORS to all routes
-app.use(cors(corsOptions));
 
-// 4. Then your session + passport middleware
+app.use(express.urlencoded({ extended: false }));
+app.use(express.json());
+// Trust proxy
+app.set('trust proxy', 1);
+
 app.use(session({
   store: new PgSession({ pool }),
   secret: process.env.SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
+  sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
   cookie: {
-    secure: process.env.NODE_ENV === "production",    // only over HTTPS in prod
-    sameSite: process.env.NODE_ENV === "production"   // 'none' is implied when credentials:true
+    secure: process.env.NODE_ENV === "production",
+     sameSite: process.env.NODE_ENV === "production"   // 'none' is implied when credentials:true
       ? "none"
       : "lax",
-    maxAge: 1000 * 60 * 60
+    maxAge: 1000 * 60 * 60, // 1 hour
   }
 }));
 app.use(passport.initialize());
