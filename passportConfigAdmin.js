@@ -1,46 +1,59 @@
+// passportConfigAdmin.js
+require("dotenv").config();
 const LocalStrategy = require("passport-local").Strategy;
-const { Pool } = require("pg");
-
-const pool = new Pool({
-  connectionString: process.env.POSTGRES_URL,
-})
+const bcrypt        = require("bcrypt");
+const Admin         = require("./models/Admin");
 
 function initialize(passport) {
+  // 1. Authentication
   const authenticateAdmin = async (email, password, done) => {
     try {
-      const { rows } = await pool.query("SELECT * FROM admin WHERE email = $1", [email]);
-      if (rows.length > 0) {
-        const admin = rows[0];
-        if (password === admin.password) {
-          return done(null, admin);
-        } else {
-          return done(null, false, { message: "Incorrect password" });
-        }
-      } else {
+      console.log("[Passport][AdminAuth] Attempting login for:", email);
+      const admin = await Admin.findOne({ email: email.toLowerCase().trim() });
+      if (!admin) {
+        console.warn("[Passport][AdminAuth] No admin found with email:", email);
         return done(null, false, { message: "No admin with that email" });
       }
+
+      // If you store hashed passwords:
+      const isValid = await bcrypt.compare(password, admin.password);
+      if (!isValid) {
+        console.warn("[Passport][AdminAuth] Incorrect password for:", email);
+        return done(null, false, { message: "Incorrect password" });
+      }
+
+      console.log("[Passport][AdminAuth] Authentication successful for:", email);
+      return done(null, admin);
+
     } catch (err) {
-      console.error("Error during authentication:", err);
+      console.error("[Passport][AdminAuth] Error during authentication:", err);
       return done(err);
     }
   };
 
-  passport.use("admin-local", new LocalStrategy({ usernameField: "email" }, authenticateAdmin));
+  passport.use("admin-local",
+    new LocalStrategy({ usernameField: "email" }, authenticateAdmin)
+  );
 
+  // 2. Serialize admin into the session
   passport.serializeUser((admin, done) => {
-    done(null, admin.id);
+    console.log("[Passport][AdminSerialize] Admin ID:", admin._id);
+    done(null, admin._id);
   });
 
+  // 3. Deserialize admin from the session
   passport.deserializeUser(async (id, done) => {
     try {
-      const { rows } = await pool.query("SELECT * FROM admin WHERE id = $1", [id]);
-      if (rows.length > 0) {
-        done(null, rows[0]);
-      } else {
-        done(new Error("Admin not found"));
+      console.log("[Passport][AdminDeserialize] Fetching admin ID:", id);
+      const admin = await Admin.findById(id).lean();
+      if (!admin) {
+        console.warn("[Passport][AdminDeserialize] Admin not found for ID:", id);
+        return done(null, false);
       }
+      console.log("[Passport][AdminDeserialize] Admin loaded:", admin.email);
+      done(null, admin);
     } catch (err) {
-      console.error("Error during deserialization:", err);
+      console.error("[Passport][AdminDeserialize] Error during deserialization:", err);
       done(err);
     }
   });
