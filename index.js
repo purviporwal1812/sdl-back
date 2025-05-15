@@ -170,19 +170,82 @@ app.post('/users/login', async (req, res) => {
 });
 
 app.post('/users/register', async (req, res) => {
-  const { email, password, phoneNumber, faceDescriptor } = req.body;
+  const { email, password, phoneNumber, face_descriptor } = req.body;
   try {
     if (await User.exists({ email })) return res.status(400).json({ message: "Email already in use." });
     const hashed = await bcrypt.hash(password, 10);
     const code = Math.floor(100000 + Math.random()*900000).toString();
-    const user = new User({ email, password: hashed, phoneNumber, faceDescriptor, verifyCode: code, codeExpiresAt: Date.now() + 3600000 });
-    await user.save();
-    await transporter.sendMail({
-      from: `"Your App" <${process.env.SMTP_USER}>`,
-      to: email,
-      subject: "Your verification code",
-      html: `<p>Your code is <h2>${code}</h2></p>`
-    });
+      const user = new User({
+        email,
+        password: hashed,
+        phoneNumber,
+        faceDescriptor: Array.isArray(face_descriptor) ? face_descriptor : [],
+        verifyCode: code,
+        codeExpiresAt: Date.now() + 3600000
+      });    await user.save();
+   await transporter.sendMail({
+  from: `"Attendance‑Tracker" <${process.env.SMTP_USER}>`,
+  to: email,
+  subject: "🔒 Your Attendance‑Tracker Verification Code",
+  html: `
+    <div style="
+      max-width:600px;
+      margin:0 auto;
+      font-family:Arial, sans-serif;
+      color:#333;
+      border:1px solid #ececec;
+      border-radius:8px;
+      overflow:hidden;
+    ">
+      <!-- Header -->
+      <div style="
+        background-color:#4A90E2;
+        padding:20px;
+        text-align:center;
+      ">
+        <h1 style="color:#fff; margin:0; font-size:24px;">Attendance‑Tracker</h1>
+      </div>
+
+      <!-- Body -->
+      <div style="padding:30px; text-align:center;">
+        <p style="font-size:16px; margin-bottom:30px;">
+          Hello <strong>${email}</strong>,<br/>
+          Your one‑time verification code is:
+        </p>
+
+        <!-- Code box -->
+        <div style="
+          display:inline-block;
+          padding:20px 30px;
+          font-size:32px;
+          letter-spacing:4px;
+          background-color:#F5F7FA;
+          border:2px dashed #4A90E2;
+          border-radius:4px;
+          margin-bottom:30px;
+        ">
+          ${code}
+        </div>
+
+        <p style="font-size:14px; color:#666; margin-bottom:0;">
+          This code will expire in <strong>60 minutes</strong>.<br/>
+          If you did not request this, you can safely ignore this email.
+        </p>
+      </div>
+
+      <!-- Footer -->
+      <div style="
+        background-color:#f4f4f4;
+        padding:15px 30px;
+        font-size:12px;
+        color:#999;
+        text-align:center;
+      ">
+        © ${new Date().getFullYear()} Attendance‑Tracker. All rights reserved.
+      </div>
+    </div>
+  `
+});
     res.status(201).json({ message: "Registration successful. Check your email." });
   } catch (err) {
     res.status(500).json({ message: "Failed to register user." });
