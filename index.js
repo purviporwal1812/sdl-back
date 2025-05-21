@@ -10,7 +10,31 @@ const bcrypt = require("bcrypt");
 const faceapi = require("face-api.js");
 const path = require("path");
 const transporter = require('./mailer');
+const http = require("http");
+const { Server } = require("socket.io");
 
+// Start server
+const app = express();
+const PORT = process.env.PORT || 5000;
+const server = http.createServer(app);
+
+const io = new Server(server, {
+  cors: {
+    origin: process.env.FRONTEND_URL || "*",
+    methods: ["GET", "POST"],
+    credentials: true
+  }
+});
+io.on("connection", (socket) => {
+  console.log("⚡️ New client connected:", socket.id);
+
+  // Optionally, you can listen for custom events from client:
+  // socket.on("joinRoom", (roomId) => { socket.join(roomId); });
+
+  socket.on("disconnect", () => {
+    console.log("Client disconnected:", socket.id);
+  });
+});
 
 console.log("[CONFIG] Loading environment variables...");
 console.log("[CONFIG] MONGO_URI =", process.env.MONGO_URI);
@@ -22,8 +46,7 @@ transporter.verify((err, success) => {
   if (err) console.error("[MAILER] SMTP connection failed:", err.stack || err);
   else console.log("[MAILER] SMTP ready to send messages");
 });
-const app = express();
-const PORT = process.env.PORT || 5000;
+
 
 mongoose
   .connect(process.env.MONGO_URI)
@@ -48,11 +71,11 @@ initializePassportAdmin(passport);
 const corsOptions = {
   origin: process.env.NODE_ENV === "production"
     ? [process.env.CLIENT_URL, process.env.FRONTEND_URL]
-    : "*",
+    : ["http://localhost:5173"],
   credentials: true,
   methods: ["GET","POST","PUT","DELETE","OPTIONS"],
   allowedHeaders: ["Content-Type","Authorization"],
-};
+}; 
 
 app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
@@ -319,74 +342,120 @@ app.get('/admin/rooms', async (req, res) => {
   try { const rooms = await Room.find(); res.json(rooms); }
   catch (err) { res.status(500).send('Failed to fetch rooms.'); }
 });
-app.post('/admin/select-room', async (req, res) => {
-  const { roomId } = req.body;
-  try {
-    await Room.updateMany({ selected: true }, { selected: false });
-    await Room.findByIdAndUpdate(roomId, { selected: true });
-    res.send('Room selected successfully');
-  } catch (err) { res.status(500).send('Failed to select room. Please try again.'); }
-});
-
-
-// ADMIN: list & select rooms
-app.get("/admin/rooms", async (req, res) => {
-  console.log('[ADMIN] GET /admin/rooms');
-  try {
-    const rooms = await pool.query("SELECT * FROM room");
-    res.json(rooms.rows);
-  } catch (err) {
-    console.error('[ADMIN] Error fetching rooms:', err.stack || err);
-    res.status(500).send("Failed to fetch rooms.");
-  }
-});
 app.post("/admin/select-room", async (req, res) => {
-  console.log('[ADMIN] POST /admin/select-room:', req.body);
+  console.log("[BACKEND] POST /admin/select-room RECEIVED. Body:", req.body);
+
   const { roomId } = req.body;
+  if (!roomId) {
+    console.warn("[BACKEND] Missing roomId in request");
+    return res.status(400).send("Missing roomId");
+  }
+
   try {
-    await pool.query("UPDATE room SET selected = FALSE WHERE selected = TRUE");
-    await pool.query("UPDATE room SET selected = TRUE WHERE id = $1", [roomId]);
-    console.log('[ADMIN] Room selected:', roomId);
-    res.send("Room selected successfully");
+    // 1) Deselect any currently‐selected rooms
+    const deselectResult = await Room.updateMany(
+      { selected: true },
+      { selected: false }
+    );
+    console.log(
+      `[BACKEND] updateMany deselect result: { n: ${deselectResult.n}, nModified: ${deselectResult.nModified} }`
+    );
+
+    // 2) Mark the requested room as selected
+    const updatedRoom = await Room.findByIdAndUpdate(
+      roomId,
+      { selected: true },
+      { new: true }
+    );
+    if (!updatedRoom) {
+      console.error(`[BACKEND] No room found with ID ${roomId}`);
+      return res.status(404).send("Room not found");
+    }
+    console.log(`[BACKEND] Room ${roomId} marked as selected:`, updatedRoom);
+
+    return res.send("Room selected successfully");
   } catch (err) {
-    console.error('[ADMIN] Error selecting room:', err.stack || err);
-    res.status(500).send("Failed to select room. Please try again.");
+    console.error("[BACKEND] Error in /admin/select-room:", err);
+    return res.status(500).send("Failed to select room. Please try again.");
   }
 });
-
 // MARK ATTENDANCE
 app.post('/mark-attendance', limiter, async (req, res) => {
   const { name, rollNumber, lat, lon } = req.body;
   const latitude = parseFloat(lat);
   const longitude = parseFloat(lon);
+
   try {
     const room = await Room.findOne({ selected: true });
     if (!room) return res.status(400).send('No room selected by the admin.');
+
     if (
       latitude >= room.minLat && latitude <= room.maxLat &&
       longitude >= room.minLon && longitude <= room.maxLon
     ) {
-      await Attendance.create({ user: req.user._id, name, rollNumber, latitude, longitude });
-      res.send(`Attendance marked successfully for: ${name}`);
+      const record = await Attendance.create({ 
+        user: req.user._id, 
+        name, 
+        rollNumber, 
+        latitude, 
+        longitude 
+      });
+
+      // Emit the new attendance object to all connected clients (e.g., admin dashboard)
+      io.emit("newAttendance", {
+        id: record._id,
+        name: record.name,
+        rollNumber: record.rollNumber,
+        latitude: record.latitude,
+        longitude: record.longitude,
+        createdAt: record.createdAt
+      });
+
+      return res.send(`Attendance marked successfully for: ${name}`);
     } else {
-      res.status(400).send('You are not in the selected room.');
+      return res.status(400).send('You are not in the selected room.');
     }
-  } catch (err) { res.status(500).send('Failed to mark attendance. Please try again.'); }
+  } catch (err) {
+    return res.status(500).send('Failed to mark attendance. Please try again.');
+  }
 });
-// ADMIN DASHBOARD (rooms CRUD)
-app.get('/admin/dashboard', async (req, res) => {
-  try { const rooms = await Room.find(); res.json(rooms); }
-  catch (err) { res.status(500).send('Failed to fetch rooms.'); }
+
+app.get("/admin/dashboard", async (req, res) => {
+  console.log("[BACKEND] GET /admin/dashboard");
+  try {
+    const rooms = await Room.find();
+    console.log(`[BACKEND] Fetched ${rooms.length} rooms`);
+    return res.json(rooms);
+  } catch (err) {
+    console.error("[BACKEND] Error fetching /admin/dashboard:", err);
+    return res.status(500).send("Failed to fetch rooms.");
+  }
 });
-app.post('/admin/dashboard', async (req, res) => {
+
+app.post("/admin/dashboard", async (req, res) => {
+  console.log("[BACKEND] POST /admin/dashboard RECEIVED. Body:", req.body);
   const { name, minLat, maxLat, minLon, maxLon } = req.body;
-  if (!name || minLat == null || maxLat == null || minLon == null || maxLon == null)
-    return res.status(400).send('All fields are required');
+
+  if (
+    !name ||
+    minLat === undefined ||
+    maxLat === undefined ||
+    minLon === undefined ||
+    maxLon === undefined
+  ) {
+    console.warn("[BACKEND] Missing field(s) in add-room payload");
+    return res.status(400).send("All fields are required");
+  }
+
   try {
     const room = new Room({ name, minLat, maxLat, minLon, maxLon });
     await room.save();
-    res.json(room);
-  } catch (err) { res.status(500).send('Failed to add room. Please try again.'); }
+    console.log("[BACKEND] New room saved:", room);
+    return res.json(room);
+  } catch (err) {
+    console.error("[BACKEND] Error saving new room:", err);
+    return res.status(500).send("Failed to add room. Please try again.");
+  }
 });
 // USER LOGOUT
 app.post('/users/logout', (req, res, next) => {
@@ -430,7 +499,8 @@ app.use((err, req, res, next) => {
   console.error('[FATAL]', err.stack);
   res.status(err.status || 500).json({ error: err.message || 'Internal Server Error' });
 });
-// Start server
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+
+// Start listening on HTTP
+server.listen(PORT, () => {
+  console.log(`Server + WebSocket running on port ${PORT}`);
 });
